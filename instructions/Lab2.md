@@ -43,7 +43,7 @@ The automarker reads a CSV log from `studentid_lab2.csv`.
 ### Evaluated metrics and pass thresholds
 
 | Metric | Default threshold |
-| --- | --- | --- |
+| --- | --- |
 | Mean Mahalanobis distance of position error (`sim - real`) | ≤ 4.0 | 
 | Chi-square pass rate (2 DoF, 95 % gate) | ≥ 0.90 | 
 
