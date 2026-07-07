@@ -42,27 +42,6 @@ The automarker reads a CSV log from `studentid_lab3.csv`.
 | Final distance to target (sim) | ≤ 0.10 m |
 | Distance to optimal path (sim) | ≤ 0.20 m | 
 
-### Guide to metrics and tuning
-
-In an EKF, Mahalanobis distance measures how far a sensor measurement is from the filter's prediction, scaled by the filter's expected uncertainty. This squared distance is called the Normalized Innovation Squared (NIS):
-
-$$
-  \text{NIS}=\nu _{k}^{T}S_{k}^{-1}\nu _{k}
-$$
-
-If your noise matrices `Q` and `R` are perfectly calibrated, errors behave like white noise. Mathematically, the sum of squared white noise variables follows a Chi-squared distribution:
-
-$$\text{NIS}\sim \chi _{p}^{2}$$
-where \(p\) = degrees of freedom = number of variables in your measurement vector-.
-
-#### How to Tune Your EKF
-
-Plot your NIS values against the theoretical $\chi ^{2}$ upper and lower bounds (e.g., a 95% confidence interval):
-
-* NIS is ABOVE the bounds (Fail High): The filter is Optimistic (overconfident). Real errors are larger than expected. You should probably increase Process Noise `Q` or Measurement Noise `R`.
-* NIS is BELOW the bounds (Fail Low): The filter is Pessimistic (sluggish). Real errors are smaller than expected. You should probably decrease Process Noise `Q` or Measurement Noise `R`.
-* NIS is INSIDE the bounds: The filter is well calibrated.
-
 ## Setting yourself up for Lab 4
 
 - Lab 4 requires you to reproduce this lab using a learning based approach
