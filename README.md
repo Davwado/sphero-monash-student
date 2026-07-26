@@ -123,7 +123,7 @@ A simulator environment is provided so that you can develop and test your contro
 
 This calibration is **very important** — it will make or break the performance of your robot in all remaining labs.
 
-[Click here for Lab 1 instructions.](./instructions/Lab1.md)
+[Click here for Lab 1 instructions.](./labs/lab1/instructions.md)
 
 ## Lab 2 - EKF Odometry
 
@@ -133,7 +133,7 @@ For the lab demo, you will move through a sequence of points and report on your 
 
 Again, calibration between the simulator, model, and real robot is key to performance. The more closely the real robot behaves like the simulator, the more likely your solution is to work in the real demo.
 
-[Click here for Lab 2 instructions.](./instructions/Lab2.md)
+[Click here for Lab 2 instructions.](./labs/lab2/instructions.md)
 
 ## Lab 3 - Path Planning
 
@@ -141,13 +141,13 @@ In Lab 3, you will discretise the robot’s operating space and investigate moti
 
 Performance in this task will depend heavily on how well your Lab 2 localisation system worked.
 
-[Click here for Lab 3 instructions.](./instructions/Lab3.md)
+[Click here for Lab 3 instructions.](./labs/lab3/instructions.md)
 
 ## Lab 4 - Navigation in a Known Environment
 
 In Lab 4, you will implement a learning-based method to find a sequence of moves that helps your robot navigate around a race track.
 
-[Click here for Lab 4 instructions.](./instructions/Lab4.md)
+[Click here for Lab 4 instructions.](./labs/lab4/instructions.md)
 
 ## Final Demo
 
@@ -155,7 +155,7 @@ For the final demo, you will program your robot to race another robot in an unkn
 
 You may consider training a reinforcement learning approach, or chaining together planning, mapping, and control modules.
 
-[Click here for final demo instructions.](./instructions/Project.md)
+[Click here for final demo instructions.](./project/Project.md)
 
 ---
 # Installation
