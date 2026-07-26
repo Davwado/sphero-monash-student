@@ -6,11 +6,15 @@ from sphero_env.envs import SpheroEnv
 
 import argparse
 import numpy as np
+from Policy import *
+
 
 from contextlib import ExitStack, contextmanager
 
 LAB1_SEED = 0
+MAX_STEPS = 500
 
+### Custom dynamics function for the Sphero robot - replace this with the one you developed in Lab 1
 def wrap_angle(angle):
     return (angle + np.pi) % (2.0 * np.pi) - np.pi  # Normalize to [-pi, pi)
 
@@ -28,6 +32,7 @@ def dynamics(state, action):
         y_new = y + speed_new * np.cos(heading_new) * 0.1
         return np.array([x_new, y_new, heading_new, speed_new], dtype=np.float32)
 
+### If needed, add the EKF from lab 2 here too, and integrate below.
 
 def make_sim_env():
     return SpheroEnv(
@@ -40,10 +45,10 @@ def make_sim_env():
         goal_tolerance=0.1,
         occupancy_grid=None,
         dynamics=dynamics,
-        obs_noise_std_pos=0.00,
-        process_noise_std_speed=0.00,
-        process_noise_std_heading=0.00,
-        obs_noise_std_vel=0,
+        obs_noise_std_pos=0.05,
+        process_noise_std_speed=0.005,
+        process_noise_std_heading=0.01,
+        obs_noise_std_vel=0.025,
         render_mode="human",
         window_size=(800, 800),
     )
@@ -66,7 +71,7 @@ def make_real_env(api):
 def managed_env(sim: bool):
     if sim:
         sim_env = make_sim_env()
-        sim_env.set_log_path("logs/lab1_sim.csv")
+        sim_env.set_log_path("logs/lab4_sim.csv")
         sim_env.start_logging()
         try:
             yield sim_env
@@ -80,7 +85,7 @@ def managed_env(sim: bool):
 
             api = stack.enter_context(SpheroEduAPI(selected_toy))
             real_env = make_real_env(api)
-            real_env.set_log_path("logs/lab1_real.csv")
+            real_env.set_log_path("logs/lab4_real.csv")
 
             real_env.start_logging()
             try:
@@ -94,15 +99,25 @@ def control_loop(control_env):
     obs, _ = control_env.reset(seed=LAB1_SEED)
     rng = np.random.default_rng(LAB1_SEED)
 
-    for _ in range(50):
+    # Initialize the policy - make sure dims align, you may want to preprocess observations
+    policy = Policy(d_in=5, hidden=64, d_out=2)
 
-        action = rng.uniform(low=-1.0, high=1.0, size=2)  # Random action for testing   
+    ## Load pre-trained weights if available
+    # policy.load_state_dict(torch.load("path_to_pretrained_model.pth"))
 
-        ## Step the environment with the action and render the result
-        # You should replace the random action with your control algorithm that computes the action based on the current observation     
-        
+    steps = 0
+    while steps < MAX_STEPS:
+
+        action = policy(torch.tensor(obs, dtype=torch.float32)).detach().numpy()
+
         obs, _, terminated, truncated, info = control_env.step(action)
+
+        if (obs[0]-control_env.goal_pos[0])**2 + (obs[1]-control_env.goal_pos[1])**2 < control_env.goal_tolerance**2:
+            break  # Move to the next waypoint if close enough
+
         control_env.render()
+
+        steps += 1
 
     control_env.emergency_stop()
 

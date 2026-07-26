@@ -3,6 +3,7 @@ import argparse
 import numpy as np
 import pygame
 from contextlib import ExitStack, contextmanager
+from EKF import *
 
 from sphero_unsw.sphero_edu import SpheroEduAPI
 from sphero_env.robot.connect import scan_and_connect
@@ -10,52 +11,7 @@ from sphero_env.robot.robot import Robot
 from sphero_env.envs import SpheroEnv
 
 
-### Custom dynamics function for the Sphero robot - replace this with the one you developed in Lab 1
-def wrap_angle(angle):
-    return (angle + np.pi) % (2.0 * np.pi) - np.pi  # Normalize to [-pi, pi)
-
-def dynamics(state, action):
-        """
-        Compute the next state given current state and action using the base dynamics without noise.
-        This is a bad model of the robot.
-        """
-        x, y, heading, speed = state
-        speed_cmd, turn_rate_cmd = action
-        # Simple unicycle model dynamics
-        heading_new = wrap_angle(heading + turn_rate_cmd * 0.1)
-        speed_new = np.clip(speed_cmd, -2.0, 2.0)
-        x_new = x + speed_new * np.sin(heading_new) * 0.1
-        y_new = y + speed_new * np.cos(heading_new) * 0.1
-        return np.array([x_new, y_new, heading_new, speed_new], dtype=np.float32)
-
-### EKF class to track odometry and perform state estimation for the Sphero robot
-# Complete this class to implement the EKF algorithm for state estimation based on your dynamics and measurement models.
-
-class EKF:
-    def __init__(self, dt=0.1):
-        self.dt = dt
-        self.state_est = np.zeros(4)  # [x, y, heading, speed]
-        self.P = np.eye(4) * 0.1  # Initial covariance
-        self.Q = np.diag([0.001, 0.001, 0.001, 0.001])  # Process noise covariance
-        self.R = np.diag([0.005, 0.005])  # Measurement noise covariance
-
-    def predict(self, action):
-        # Predict the next state using the dynamics function
-        self.state_est = dynamics(self.state_est, action)
-        
-        # Update the covariance matrix using a simple linear approximation of the dynamics
-        self.P = self.P # Replace this with a proper Jacobian-based update
-        return self.state_est, self.P
-
-    def update(self, measurement):
-        # Update the state estimate with a new measurement
-        
-        self.state_est = self.state_est  # Replace this with a proper Kalman gain update
-        self.P = self.P  # Replace this with a proper covariance update
-
-        return self.state_est, self.P
-    
-### Control loop to handle the action and update the environments, 
+### Control loop to handle the action and update the environments,
 # edit this to include the EKF prediction and update steps, and to visualize the belief state in the simulator.
 def control_loop(env, ekf, robot_env=None,action=None, moving=False):
     """
@@ -69,7 +25,7 @@ def control_loop(env, ekf, robot_env=None,action=None, moving=False):
     if robot_env is not None:
         robot_obs, _, _, _, robot_info = robot_env.step(action)
         # print(f"Robot state: {info['state_odom']}, Collision: {info['collision']}, Acceleration: {info['acceleration']}, Orientation: {info['orientation']}, Gyro: {info['gyroscope']}, Velocity: {info['velocity']}")
- 
+
     if robot_env is not None and not moving:
         robot_env.emergency_stop()
 

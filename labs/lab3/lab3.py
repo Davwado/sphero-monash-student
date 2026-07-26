@@ -7,8 +7,9 @@ from sphero_env.envs import SpheroEnv
 import argparse
 import numpy as np
 
+from Planner import *
+
 from contextlib import ExitStack, contextmanager
-import torch
 
 LAB1_SEED = 0
 MAX_STEPS = 500
@@ -33,21 +34,18 @@ def dynamics(state, action):
 
 ### If needed, add the EKF from lab 2 here too, and integrate below.
 
-### Modify the policy class to implement a neural network policy for the Sphero robot. T
-# he policy should take the current state as input and output the action to be taken. 
-# You can use PyTorch to define the neural network architecture.
-# You will need to train this policy using reinforcement learning or imitation learning techniques, 
-# which should be done in a separate training script (not provided).
-class Policy(torch.nn.Module):
-    def __init__(self, d_in=4,hidden=64,d_out=2):
-        super(Policy, self).__init__()
+class Controller:
+    def __init__(self, dt=0.1):
+        self.dt = dt
 
-        self.model = torch.nn.Sequential(torch.nn.Linear(d_in, hidden),
-                                         torch.nn.ReLU(),
-                                   torch.nn.Linear(hidden, d_out))
-        
-    def forward(self, x):
-        return self.model(x)
+    def compute_action(self, state, waypoint):
+        """
+        Fill in this function to implement a simple controller that computes the action based on the current state and the waypoint.
+        """
+
+        action = np.array([0.0, 0.0])  # Replace this with your controller's output
+
+        return action  # Replace this with your controller's output
 
 def make_sim_env():
     return SpheroEnv(
@@ -86,7 +84,7 @@ def make_real_env(api):
 def managed_env(sim: bool):
     if sim:
         sim_env = make_sim_env()
-        sim_env.set_log_path("logs/lab4_sim.csv")
+        sim_env.set_log_path("logs/lab3_sim.csv")
         sim_env.start_logging()
         try:
             yield sim_env
@@ -100,7 +98,7 @@ def managed_env(sim: bool):
 
             api = stack.enter_context(SpheroEduAPI(selected_toy))
             real_env = make_real_env(api)
-            real_env.set_log_path("logs/lab4_real.csv")
+            real_env.set_log_path("logs/lab3_real.csv")
 
             real_env.start_logging()
             try:
@@ -114,24 +112,26 @@ def control_loop(control_env):
     obs, _ = control_env.reset(seed=LAB1_SEED)
     rng = np.random.default_rng(LAB1_SEED)
 
-    # Initialize the policy - make sure dims align, you may want to preprocess observations
-    policy = Policy(d_in=5, hidden=64, d_out=2)
+    controller = Controller(dt=control_env.dt)
+    planner = Planner(map=control_env.occupancy_grid, dt=control_env.dt)
 
-    ## Load pre-trained weights if available
-    # policy.load_state_dict(torch.load("path_to_pretrained_model.pth"))
+    waypoints = planner.plan(obs, control_env.goal_pos)
 
     steps = 0
     while steps < MAX_STEPS:
 
-        action = policy(torch.tensor(obs, dtype=torch.float32)).detach().numpy()
-            
-        obs, _, terminated, truncated, info = control_env.step(action)
+        for waypoint in waypoints:
+            action = controller.compute_action(obs, waypoint)
+            obs, _, terminated, truncated, info = control_env.step(action)
 
-        if (obs[0]-control_env.goal_pos[0])**2 + (obs[1]-control_env.goal_pos[1])**2 < control_env.goal_tolerance**2:
-            break  # Move to the next waypoint if close enough
-            
-        control_env.render()
-        
+            if (obs[0]-waypoint[0])**2 + (obs[1]-waypoint[1])**2 < control_env.goal_tolerance**2:
+                continue  # Move to the next waypoint if close enough
+
+            if (obs[0]-control_env.goal_pos[0])**2 + (obs[1]-control_env.goal_pos[1])**2 < control_env.goal_tolerance**2:
+                break  # Move to the next waypoint if close enough
+
+            control_env.render()
+
         steps += 1
 
     control_env.emergency_stop()
