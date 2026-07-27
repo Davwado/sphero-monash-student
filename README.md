@@ -75,7 +75,7 @@ The main fields are:
 | `velocity`        |               cm/s | Latest velocity vector from the motor encoders. `x` is right/left velocity and `y` is forward/back velocity.                           |
 | `speed_cmd`       |                m/s | Speed command sent through the environment action interface. This is converted internally to the Sphero speed scale.                   |
 | `heading_cmd`     |            radians | Heading command sent through the environment action interface. This is converted internally to degrees for the Sphero API.             |
-| `setpoint_xy`     |           `[m, m]` | Current target/setpoint position used for logging and visualisation.                                 
+| `setpoint_xy`     |           `[m, m]` | Current target/setpoint position used for logging and visualisation.
 
 Example:
 
@@ -107,7 +107,7 @@ The collision detector is software-based. It uses changes in acceleration, drops
 ### Goals
 
 The environment can be configured with a 2d positional goal and goal tolerance:
-* `env.goal_pos` 
+* `env.goal_pos`
 * `env.goal_tolerance`
 
 ### Teleoperation example
@@ -188,23 +188,10 @@ pip install -r requirements.txt
 
 ## Option 2: Create an environment with `uv`
 
-Create a virtual environment and activate it:
+Create a virtual environment, and install all dependencies and activate it:
 
 ```bash
-uv venv
-source .venv/bin/activate
-```
-
-Install the project into that environment:
-
-```bash
-uv pip install -e .
-```
-
-To install the extra dependencies listed in `requirements.txt`:
-
-```bash
-uv pip install -r requirements.txt
+uv sync
 ```
 
 ## Verify the installation
