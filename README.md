@@ -160,7 +160,7 @@ You may consider training a reinforcement learning approach, or chaining togethe
 ---
 # Installation
 
-This project requires Python 3.9 or newer.
+This project requires Python 3.9 and below 3.13.
 
 We recommend creating a virtual environment before installing the package and its dependencies.
 
