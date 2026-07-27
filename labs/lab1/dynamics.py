@@ -9,16 +9,15 @@ def dynamics(state, action):
         This can be rewritten to improve the model.
 
         The action (input) will be:
-            action = [speed, turn_rate_cmd]
+            action = [speed, heading_cmd]
         The returned state (output) will be:
             state = [x_new, y_new, heading_new, speed_new]
         """
         x, y, heading, speed = state
-        speed_cmd, turn_rate_cmd = action
+        speed_cmd, heading_cmd = action
         # Simple unicycle model dynamics
-        heading_new = wrap_angle(heading + turn_rate_cmd * 0.1)
+        heading_new = wrap_angle(heading_cmd)
         speed_new = np.clip(speed + speed_cmd * 0.1, 0, 1.0)
         x_new = x + speed_new * np.sin(heading_new) * 0.1
         y_new = y + speed_new * np.cos(heading_new) * 0.1
         return np.array([x_new, y_new, heading_new, speed_new], dtype=np.float32)
-

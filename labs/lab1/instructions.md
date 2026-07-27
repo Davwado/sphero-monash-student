@@ -2,6 +2,8 @@
 
 Lab 1 will focus on familiarising yourself with the robot and simulator, teleoperating it and understanding the action and state space of the robot.
 
+For this lab, the robot action input is `[speed, heading]`, where the second input is the desired heading angle rather than a turn rate.
+
 ## Key learning outcomes:
 - Implement and tune a PD controller driving a robot to a fixed robot pose
 - Understand robot state representations and the value of good modelling
