@@ -2,6 +2,8 @@
 
 In Lab 2, you should use an EKF to improve the vehicle odometry by incorporating sensor measurements. You goal should also be to produce a well calibrated uncertainty model that ensures that the true robot position is always within your prediction.
 
+For this lab, the robot action input is `[speed, heading]`, where the second input is the desired heading angle rather than a turn rate.
+
 ## Key learning outcomes
 
 - Understand how to implement and apply an EKF that fuses robot sensor measurements with a suitable dynamics model.
