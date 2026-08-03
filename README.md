@@ -73,7 +73,7 @@ The main fields are:
 | `orientation`     |            degrees | Latest robot orientation/attitude. `pitch` and `yaw` are approximately `-180°` to `180°`; `roll` is approximately `-90°` to `90°`.     |
 | `gyro`            |          degrees/s | Latest gyroscope rate reading. Axes are approximately in the range `-2000°/s` to `2000°/s`.                                            |
 | `velocity`        |               cm/s | Latest velocity vector from the motor encoders. `x` is right/left velocity and `y` is forward/back velocity.                           |
-| `speed_cmd`       |                m/s | Speed command sent through the environment action interface. This is converted internally to the Sphero speed scale.                   |
+| `speed_cmd`       |           unitless | Speed command sent through the environment action interface. This is converted internally to the Sphero speed scale.                   |
 | `heading_cmd`     |            radians | Heading command sent through the environment action interface. This is converted internally to degrees for the Sphero API.             |
 | `setpoint_xy`     |           `[m, m]` | Current target/setpoint position used for logging and visualisation.
 
