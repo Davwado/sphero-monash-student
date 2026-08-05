@@ -77,14 +77,42 @@ def control_loop(control_env):
     obs, _ = control_env.reset(seed=LAB1_SEED)
     rng = np.random.default_rng(LAB1_SEED)
 
-    for _ in range(50):
 
-        action = rng.uniform(low=-1.0, high=1.0, size=2)  # Random action for testing
+    # Bool for goal reached
+    goal_reached = False
+
+    while goal_reached == False:
+
+        #action = rng.uniform(low=-1.0, high=1.0, size=2)  # Random action for testing
 
         ## Step the environment with the action and render the result
-        # You should replace the random action with your control algorithm that computes the action based on the current observation
+        x_meas, y_meas, heading_meas, speed_meas, collision_flag = obs
+        
+        # Decides action based on the observation
+        # Checks if ball is within the goal tolerance
+        if x_meas < control_env.goal_pos[0] - control_env.goal_tolerance or x_meas > control_env.goal_pos[0] + control_env.goal_tolerance or y_meas < control_env.goal_pos[1] - control_env.goal_tolerance or y_meas > control_env.goal_pos[1] + control_env.goal_tolerance:
+            # Ball is outside the goal tolerance, move towards the goal
 
+            # Calculates the heading angle towards the goal
+            heading_angle = np.arctan2(control_env.goal_pos[1] - y_meas, control_env.goal_pos[0] - x_meas)
+
+            # Creates action
+            action = [0.015, heading_angle]
+
+        else:
+            print("Ball is within the goal tolerance. Stopping the robot.")
+
+            # Ball is within the goal tolerance, stop moving
+            action = [0.0, 0.0]  # Stop moving
+
+            # Exit the loop if the ball is within the goal tolerance
+            goal_reached = True
+            
+
+        # Updates values
         obs, _, terminated, truncated, info = control_env.step(action)
+        
+        # Execute the action in the environment
         control_env.render()
 
     control_env.emergency_stop()
