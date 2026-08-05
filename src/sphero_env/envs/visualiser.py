@@ -43,6 +43,13 @@ class Visualiser:
         self.distance_map = None
         self.screen = None
         self.clock = None
+        self._font = None
+        # HUD state (commanded vs measured values shown live on the window)
+        self.hud_action = None       # (speed_cmd, heading_cmd) from last record()
+        self.hud_collision = 0.0
+        self.hud_step = 0
+        self.hud_run = 0
+        self.hud_status = ""
 
     def start_logging(self):
         if not self.csv_path or self._writer is not None:
@@ -71,6 +78,16 @@ class Visualiser:
         self._overlay_true_traj = None
         self.belief_mean = None
         self.belief_cov = None
+        self.hud_action = None
+        self.hud_collision = 0.0
+        self.hud_step = 0
+
+    def set_hud(self, run=None, status=None):
+        """Update session-level HUD fields (run counter, status line)."""
+        if run is not None:
+            self.hud_run = int(run)
+        if status is not None:
+            self.hud_status = str(status)
 
     def set_belief(self, mean, cov):
         self.belief_mean = np.asarray(mean, dtype=np.float32)
@@ -101,7 +118,14 @@ class Visualiser:
         self._overlay_odom_traj = _clean(odom)
         self._overlay_true_traj = _clean(true)
 
-    def record(self, gt_state, odom_state, action, est_state=None, est_cov=None, setpoint=None):
+    def record(self, gt_state, odom_state, action, est_state=None, est_cov=None, setpoint=None,
+               collision=None, step_count=None):
+        # Stash latest values for the HUD overlay
+        self.hud_action = None if action is None else (float(action[0]), float(action[1]))
+        if collision is not None:
+            self.hud_collision = float(collision)
+        if step_count is not None:
+            self.hud_step = int(step_count)
         # Append to trajectories
         if gt_state is not None:
             self._gt_traj.append(tuple(gt_state[:2]))
@@ -163,6 +187,7 @@ class Visualiser:
         self.screen = pygame.display.set_mode(self.window_size)
         pygame.display.set_caption("Sphero Visualiser")
         self.clock = pygame.time.Clock()
+        self._font = pygame.font.SysFont(None, 18)
 
     def render(self, gt_state, odom_state):
         if self.render_mode != "human":
@@ -313,6 +338,13 @@ class Visualiser:
             oy2 = y_o + heading_len * np.cos(heading_o)
             opx2, opy2 = world_to_screen(ox2, oy2)
             pygame.draw.line(self.screen, odom_color, (odom_px, odom_py), (opx2, opy2), 2)
+            # Ghost line: commanded heading (slightly longer than the measured one)
+            if self.hud_action is not None:
+                _, heading_cmd = self.hud_action
+                gx2 = x_o + 0.20 * np.sin(heading_cmd)
+                gy2 = y_o + 0.20 * np.cos(heading_cmd)
+                gpx2, gpy2 = world_to_screen(gx2, gy2)
+                pygame.draw.line(self.screen, (255, 165, 0), (odom_px, odom_py), (gpx2, gpy2), 1)
         # Belief mean + covariance ellipse
         if self.belief_mean is not None and self.belief_cov is not None:
             mean = self.belief_mean
@@ -330,17 +362,115 @@ class Visualiser:
             pygame.draw.circle(self.screen, belief_color, (bpx, bpy), 4, 1)
             self._draw_covariance_ellipse(self.screen, mean_pos, cov_pos, world_to_screen, belief_color, n_std=2.0)
         # Legend
-        font = pygame.font.SysFont(None, 18)
+        font = self._font
         legend_lines = [
             "Green: ground truth",
             "Blue: odometry",
             "Magenta: estimate",
+            "Orange: commanded",
         ]
         for idx, text in enumerate(legend_lines):
             surf = font.render(text, True, (220, 220, 220))
             self.screen.blit(surf, (5, 5 + 18 * idx))
+        self._draw_hud(gt_state, odom_state)
         pygame.display.flip()
         self.clock.tick(60)
+
+    def _draw_arrow(self, surface, center, heading_rad, length, color, width=2):
+        """Draw a small arrow at `center` pointing along `heading_rad`.
+
+        Heading convention matches the world view: 0 rad = up (+y),
+        +pi/2 = right (+x). Screen y grows downward, hence (sin, -cos).
+        """
+        cx, cy = center
+        dx = math.sin(heading_rad)
+        dy = -math.cos(heading_rad)
+        tip = (cx + dx * length, cy + dy * length)
+        pygame.draw.line(surface, color, (cx, cy), tip, width)
+        # Arrowhead: two short lines swept back from the tip
+        head_len = max(4, length * 0.35)
+        ang = math.atan2(dy, dx)
+        for offset in (2.6, -2.6):
+            hx = tip[0] + head_len * math.cos(ang + offset)
+            hy = tip[1] + head_len * math.sin(ang + offset)
+            pygame.draw.line(surface, color, tip, (hx, hy), width)
+
+    def _draw_hud(self, gt_state, odom_state):
+        """Semi-transparent panel (top-right) with commanded vs measured values."""
+        cmd_color = (255, 165, 0)
+        mea_color = (50, 150, 255)
+        text_color = (220, 220, 220)
+        dim_color = (140, 140, 140)
+        alert_color = (255, 60, 60)
+        panel_w, panel_h = 200, 262
+        panel = pygame.Surface((panel_w, panel_h), pygame.SRCALPHA)
+        panel.fill((0, 0, 0, 140))
+        font = self._font
+
+        def row(y, label, color, arrow_heading=None):
+            panel.blit(font.render(label, True, color), (8, y))
+            if arrow_heading is not None:
+                self._draw_arrow(panel, (panel_w - 18, y + 6), arrow_heading, 9, color)
+
+        y = 6
+        header = f"Run {self.hud_run}   Step {self.hud_step}"
+        row(y, header, text_color); y += 18
+        if self.hud_status:
+            row(y, self.hud_status, text_color)
+        y += 22
+
+        if self.hud_action is not None:
+            speed_cmd, heading_cmd = self.hud_action
+            row(y, f"Cmd hdg: {math.degrees(heading_cmd) % 360:6.1f} deg", cmd_color, heading_cmd)
+        else:
+            row(y, "Cmd hdg:     -- deg", dim_color)
+        y += 18
+        if odom_state is not None:
+            row(y, f"Mea hdg: {math.degrees(float(odom_state[2])) % 360:6.1f} deg", mea_color,
+                float(odom_state[2]))
+        else:
+            row(y, "Mea hdg:     -- deg", dim_color)
+        y += 18
+        if self.hud_action is not None:
+            row(y, f"Cmd spd: {self.hud_action[0]:+.3f} m/s", cmd_color)
+        else:
+            row(y, "Cmd spd:     -- m/s", dim_color)
+        y += 18
+        if odom_state is not None:
+            row(y, f"Mea spd: {float(odom_state[3]):+.3f} m/s", mea_color)
+        else:
+            row(y, "Mea spd:     -- m/s", dim_color)
+        y += 22
+
+        if odom_state is not None:
+            x_o, y_o = float(odom_state[0]), float(odom_state[1])
+            dist = math.hypot(x_o - float(self.goal_pos[0]), y_o - float(self.goal_pos[1]))
+            row(y, f"Pos: ({x_o:+.2f}, {y_o:+.2f}) m", text_color); y += 18
+            row(y, f"Goal dist: {dist:.2f} m", text_color); y += 18
+        else:
+            row(y, "Pos:  --", dim_color); y += 18
+            row(y, "Goal dist:  --", dim_color); y += 18
+        if self.hud_collision > 0.5:
+            row(y, "COLLISION", alert_color)
+        else:
+            row(y, "no contact", dim_color)
+        y += 24
+
+        # Compass: commanded (orange) vs measured (blue) heading needles
+        comp_r = 28
+        comp_cx, comp_cy = panel_w // 2, y + comp_r + 4
+        pygame.draw.circle(panel, dim_color, (comp_cx, comp_cy), comp_r, 1)
+        panel.blit(font.render("N", True, dim_color), (comp_cx - 4, comp_cy - comp_r - 14))
+        pygame.draw.line(panel, dim_color, (comp_cx, comp_cy - comp_r),
+                         (comp_cx, comp_cy - comp_r + 4), 1)
+        if odom_state is not None:
+            self._draw_arrow(panel, (comp_cx, comp_cy), float(odom_state[2]), comp_r - 6,
+                             mea_color, width=2)
+        if self.hud_action is not None:
+            self._draw_arrow(panel, (comp_cx, comp_cy), self.hud_action[1], comp_r - 6,
+                             cmd_color, width=2)
+
+        self.screen.blit(panel, (self.window_size[0] - panel_w - 8, 8))
 
     def close(self):
         self.stop_logging()

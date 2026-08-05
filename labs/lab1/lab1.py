@@ -5,12 +5,19 @@ from sphero_env.robot.robot import Robot
 from sphero_env.envs import SpheroEnv
 
 import argparse
+import importlib
+import time
+import traceback
+
 import numpy as np
+import pygame
+
 from dynamics import *
+import controller
 
 from contextlib import ExitStack, contextmanager
 
-LAB1_SEED = 0
+IDLE_STATUS = "IDLE  R:run  SPACE:stop  Q:quit"
 
 def make_sim_env():
     return SpheroEnv(
@@ -28,7 +35,7 @@ def make_sim_env():
         process_noise_std_heading=0.00,
         obs_noise_std_vel=0,
         render_mode="human",
-        window_size=(800, 800),
+        window_size=(1000, 1000),
     )
 
 def make_real_env(api):
@@ -47,10 +54,10 @@ def make_real_env(api):
 
 @contextmanager
 def managed_env(sim: bool):
+    # The Bluetooth connection (real robot) is opened ONCE here and stays open
+    # for the whole session; runs are started/stopped from the pygame window.
     if sim:
         sim_env = make_sim_env()
-        sim_env.set_log_path("logs/lab1_sim.csv")
-        sim_env.start_logging()
         try:
             yield sim_env
         finally:
@@ -63,40 +70,137 @@ def managed_env(sim: bool):
 
             api = stack.enter_context(SpheroEduAPI(selected_toy))
             real_env = make_real_env(api)
-            real_env.set_log_path("logs/lab1_real.csv")
-
-            real_env.start_logging()
             try:
                 yield real_env
             finally:
-                real_env.close()
                 real_env.stop_logging()
+                real_env.close()
 
-def control_loop(control_env):
 
-    obs, _ = control_env.reset(seed=LAB1_SEED)
-    rng = np.random.default_rng(LAB1_SEED)
+def _safe_stop(env):
+    """Emergency-stop without letting a dead BLE link raise."""
+    try:
+        env.emergency_stop()
+    except Exception:
+        traceback.print_exc()
 
-    for _ in range(50):
 
-        action = rng.uniform(low=-1.0, high=1.0, size=2)  # Random action for testing
+def run_one(env, sim: bool, run_idx: int, steps: int, seed: int) -> str:
+    """Execute one control run. Returns "idle" (back to menu) or "quit"."""
+    # Hot-reload the controller so edits take effect without reconnecting.
+    try:
+        importlib.reload(controller)
+    except Exception:
+        traceback.print_exc()
+        print("controller.py failed to load - fix it and press R again.")
+        return "idle"
 
-        ## Step the environment with the action and render the result
-        # You should replace the random action with your control algorithm that computes the action based on the current observation
+    # New CSV per run.
+    env.stop_logging()
+    env.set_log_path(f"logs/lab1_{'sim' if sim else 'real'}_run{run_idx:03d}.csv")
+    env.start_logging()
 
-        obs, _, terminated, truncated, info = control_env.step(action)
-        control_env.render()
+    env.vis.reset()
+    env.vis.set_hud(run=run_idx, status="RUNNING  SPACE:abort  Q:quit")
+    print(f"Run {run_idx}: {steps} steps (seed={seed})")
 
-    control_env.emergency_stop()
+    result = "idle"
+    try:
+        obs, _ = env.reset(seed=seed)
+        for step in range(steps):
+            aborted = False
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
+                    return "quit"
+                if event.type == pygame.KEYDOWN:
+                    if event.key == pygame.K_q:
+                        return "quit"
+                    if event.key in (pygame.K_SPACE, pygame.K_ESCAPE):
+                        print("Run aborted.")
+                        aborted = True
+            if aborted:
+                break
+
+            try:
+                action = controller.compute_action(obs, step)
+            except Exception:
+                traceback.print_exc()
+                print("controller.compute_action crashed - run aborted.")
+                break
+
+            try:
+                obs, _, terminated, truncated, info = env.step(action)
+            except Exception:
+                # Covers BLE timeouts/disconnects on the real robot. We never
+                # auto-reconnect; stop and drop back to idle.
+                traceback.print_exc()
+                print("env.step failed - run aborted.")
+                break
+
+            env.render()
+            if terminated or truncated:
+                print(f"Episode ended at step {step} "
+                      f"(terminated={terminated}, truncated={truncated}).")
+                break
+    except KeyboardInterrupt:
+        print("Run interrupted (Ctrl+C) - robot stopped, back to idle.")
+    finally:
+        _safe_stop(env)
+        env.stop_logging()
+        env.vis.set_hud(status=IDLE_STATUS)
+
+    return result
+
+
+def run_session(env, sim: bool, steps: int, seed: int):
+    """Idle loop: window stays open and connected; R starts a run."""
+    run_idx = 1
+    env.vis.set_hud(run=0, status=IDLE_STATUS)
+    print("Ready. In the pygame window: R = run, SPACE = stop, Q = quit.")
+
+    last_keepalive = time.time()
+    while True:
+        try:
+            env.render()
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
+                    return
+                if event.type == pygame.KEYDOWN:
+                    if event.key == pygame.K_q:
+                        return
+                    if event.key == pygame.K_SPACE:
+                        _safe_stop(env)
+                    if event.key == pygame.K_r:
+                        if run_one(env, sim, run_idx, steps, seed) == "quit":
+                            return
+                        run_idx += 1
+                        last_keepalive = time.time()
+
+            # Keep the BLE link warm while idle so the toy doesn't sleep.
+            if not sim and time.time() - last_keepalive > 3.0:
+                last_keepalive = time.time()
+                try:
+                    env.api.get_location()
+                except Exception:
+                    traceback.print_exc()
+
+            time.sleep(0.1)
+        except KeyboardInterrupt:
+            _safe_stop(env)
+            print("Ctrl+C: robot stopped. Press Q in the window to quit.")
 
 
 def main(argv=None):
     parser = argparse.ArgumentParser()
     parser.add_argument("--sim", action="store_true", help="Run simulation")
+    parser.add_argument("--steps", type=int, default=100,
+                        help="Steps per run (lab spec: 100)")
+    parser.add_argument("--seed", type=int, default=0,
+                        help="Reset seed used for every run")
     args = parser.parse_args(argv)
 
     with managed_env(args.sim) as control_env:
-        control_loop(control_env)
+        run_session(control_env, args.sim, args.steps, args.seed)
 
 if __name__ == "__main__":
     main()
