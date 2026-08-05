@@ -29,7 +29,10 @@ class Visualiser:
             "est_x", "est_y", "odom_x", "odom_y", "gt_x", "gt_y",
             "cov_x", "cov_y", "cov_xy", "cov_yx",
             "heading_cmd", "speed_cmd", "heading", "speed",
-            "setpoint_x", "setpoint_y"
+            "setpoint_x", "setpoint_y",
+            # Appended columns (keep at the end for backwards compatibility);
+            # these make a saved CSV a complete replay file for lab1 --replay.
+            "gt_heading", "gt_speed", "collision", "step"
         ]
         self._gt_traj = []
         self._odom_traj = []
@@ -44,7 +47,10 @@ class Visualiser:
         self.screen = None
         self.clock = None
         self._font = None
+        self._help_font = None
         # HUD state (commanded vs measured values shown live on the window)
+        self.hud_font_size = 22      # adjustable via set_hud_font_size / +/- keys
+        self._hud_font = None
         self.hud_action = None       # (speed_cmd, heading_cmd) from last record()
         self.hud_collision = 0.0
         self.hud_step = 0
@@ -88,6 +94,33 @@ class Visualiser:
             self.hud_run = int(run)
         if status is not None:
             self.hud_status = str(status)
+
+    def set_hud_font_size(self, size):
+        """Set the HUD text size (clamped to 12-48). Layout scales with it."""
+        self.hud_font_size = int(max(12, min(48, size)))
+        if self.screen is not None:
+            self._hud_font = pygame.font.SysFont(None, self.hud_font_size)
+
+    def set_trajectories(self, gt=None, odom=None, est=None):
+        """Replace the drawn trajectories (used by replay to show a prefix)."""
+        if gt is not None:
+            self._gt_traj = list(gt)
+        if odom is not None:
+            self._odom_traj = list(odom)
+        if est is not None:
+            self._est_traj = list(est)
+
+    def scrub_bar_rect(self):
+        """Screen rect of the replay scrub bar (shared with mouse hit-tests)."""
+        w, h = self.window_size
+        return pygame.Rect(20, h - 34, w - 40, 14)
+
+    def handle_resize(self, w, h):
+        """React to the window being resized/maximised: everything is drawn
+        from self.window_size, so updating it rescales the whole view."""
+        self.window_size = (max(200, int(w)), max(200, int(h)))
+        if self.screen is not None:
+            self.screen = pygame.display.set_mode(self.window_size, pygame.RESIZABLE)
 
     def set_belief(self, mean, cov):
         self.belief_mean = np.asarray(mean, dtype=np.float32)
@@ -172,6 +205,11 @@ class Visualiser:
             row["cov_yx"] = float(cov2[1,0])
         else:
             row["cov_x"] = row["cov_y"] = row["cov_xy"] = row["cov_yx"] = np.nan
+        # Replay columns
+        row["gt_heading"] = float(gt_state[2]) if gt_state is not None and len(gt_state) > 2 else np.nan
+        row["gt_speed"] = float(gt_state[3]) if gt_state is not None and len(gt_state) > 3 else np.nan
+        row["collision"] = float(collision) if collision is not None else np.nan
+        row["step"] = int(step_count) if step_count is not None else np.nan
         # Write
         if self._writer is not None:
             self._writer.writerow([row.get(col, np.nan) for col in self._columns])
@@ -184,12 +222,16 @@ class Visualiser:
         if self.screen is not None:
             return
         pygame.init()
-        self.screen = pygame.display.set_mode(self.window_size)
+        self.screen = pygame.display.set_mode(self.window_size, pygame.RESIZABLE)
         pygame.display.set_caption("Sphero Visualiser")
         self.clock = pygame.time.Clock()
         self._font = pygame.font.SysFont(None, 18)
+        self._hud_font = pygame.font.SysFont(None, self.hud_font_size)
+        self._help_font = pygame.font.SysFont(None, 16)
 
-    def render(self, gt_state, odom_state):
+    def render(self, gt_state, odom_state, scrub=None):
+        """Draw a frame. `scrub=(frame_idx, total_frames)` adds a replay
+        scrub bar at the bottom of the window."""
         if self.render_mode != "human":
             return
         self._init_pygame()
@@ -373,8 +415,101 @@ class Visualiser:
             surf = font.render(text, True, (220, 220, 220))
             self.screen.blit(surf, (5, 5 + 18 * idx))
         self._draw_hud(gt_state, odom_state)
+        if scrub is not None:
+            self._draw_scrub_bar(*scrub)
         pygame.display.flip()
         self.clock.tick(60)
+
+    def _draw_scrub_bar(self, idx, total, playing=False):
+        """Video-style timeline with a player control strip above it.
+
+        The strip is justified across the full bar width: drawn icons
+        (step, jump, play/pause, scrub) plus keycap-styled letter keys.
+        """
+        scr = self.screen
+        bar = self.scrub_bar_rect()
+        orange = (255, 165, 0)
+        icon_col = (220, 220, 220)
+        text_col = (200, 200, 205)
+        cap_bg = (52, 52, 72)
+        cap_border = (115, 115, 145)
+        row_y = bar.y - 26          # top of the control strip
+        ih = 12                     # icon height
+        iy = row_y + 1              # icon top (visually centered vs 16px text)
+        font = self._help_font
+
+        # --- icon painters: each returns its width ---------------------------
+        def icon_step(x):
+            pygame.draw.polygon(scr, icon_col, [(x + 8, iy), (x + 8, iy + ih), (x, iy + ih // 2)])
+            pygame.draw.polygon(scr, icon_col, [(x + 12, iy), (x + 12, iy + ih), (x + 20, iy + ih // 2)])
+            return 20
+
+        def icon_jump(x):
+            pygame.draw.rect(scr, icon_col, (x, iy, 2, ih))
+            pygame.draw.polygon(scr, icon_col, [(x + 12, iy), (x + 12, iy + ih), (x + 4, iy + ih // 2)])
+            pygame.draw.polygon(scr, icon_col, [(x + 16, iy), (x + 16, iy + ih), (x + 24, iy + ih // 2)])
+            pygame.draw.rect(scr, icon_col, (x + 26, iy, 2, ih))
+            return 28
+
+        def icon_play_pause(x):
+            if playing:  # show pause while playing
+                pygame.draw.rect(scr, orange, (x, iy, 4, ih))
+                pygame.draw.rect(scr, orange, (x + 7, iy, 4, ih))
+            else:        # show play while paused
+                pygame.draw.polygon(scr, orange, [(x, iy), (x, iy + ih), (x + 11, iy + ih // 2)])
+            return 11
+
+        def icon_scrub(x):
+            cy = iy + ih // 2
+            pygame.draw.line(scr, icon_col, (x, cy), (x + 22, cy), 2)
+            pygame.draw.circle(scr, orange, (x + 13, cy), 5)
+            return 22
+
+        def keycap(label):
+            t = font.render(label, True, orange)
+            w = t.get_width() + 10
+
+            def draw(x):
+                r = pygame.Rect(x, row_y - 1, w, 16)
+                pygame.draw.rect(scr, cap_bg, r, border_radius=4)
+                pygame.draw.rect(scr, cap_border, r, 1, border_radius=4)
+                scr.blit(t, (x + 5, row_y + 1))
+                return w
+            return draw
+
+        # --- segments: (icon painter or None, icon width, label text) --------
+        segments = [
+            (icon_step, 20, "step"),
+            (icon_jump, 28, "Home/End"),
+            (icon_play_pause, 11, "Space"),
+            (icon_scrub, 22, "wheel / drag"),
+            (keycap("S"), font.size("S")[0] + 10, "save"),
+            (keycap("Esc"), font.size("Esc")[0] + 10, "back"),
+            (keycap("Q"), font.size("Q")[0] + 10, "quit"),
+        ]
+        counter = font.render(f"{idx + 1} / {total}", True, orange)
+
+        # Justify: distribute leftover width evenly between segments + counter.
+        labels = [font.render(s[2], True, text_col) for s in segments]
+        widths = [s[1] + 5 + l.get_width() for s, l in zip(segments, labels)]
+        widths.append(counter.get_width())
+        gap = max(8, (bar.width - sum(widths)) // (len(widths) - 1))
+        x = bar.x
+        for (painter, iw, _), label in zip(segments, labels):
+            painter(x)
+            scr.blit(label, (x + iw + 5, row_y))
+            x += iw + 5 + label.get_width() + gap
+        scr.blit(counter, (bar.right - counter.get_width(), row_y))
+
+        # --- the timeline itself ---------------------------------------------
+        pygame.draw.rect(scr, (40, 40, 55), bar)
+        frac = 0.0 if total <= 1 else idx / (total - 1)
+        fill = bar.copy()
+        fill.width = max(0, int(bar.width * frac))
+        pygame.draw.rect(scr, (90, 90, 130), fill)
+        pygame.draw.rect(scr, (140, 140, 140), bar, 1)
+        handle_x = bar.x + int(bar.width * frac)
+        pygame.draw.circle(scr, orange, (handle_x, bar.centery), 9)
 
     def _draw_arrow(self, surface, center, heading_rad, length, color, width=2):
         """Draw a small arrow at `center` pointing along `heading_rad`.
@@ -396,79 +531,92 @@ class Visualiser:
             pygame.draw.line(surface, color, tip, (hx, hy), width)
 
     def _draw_hud(self, gt_state, odom_state):
-        """Semi-transparent panel (top-right) with commanded vs measured values."""
+        """Semi-transparent panel (top-right) with commanded vs measured values.
+
+        All layout scales with self.hud_font_size (see set_hud_font_size).
+        """
         cmd_color = (255, 165, 0)
         mea_color = (50, 150, 255)
         text_color = (220, 220, 220)
         dim_color = (140, 140, 140)
         alert_color = (255, 60, 60)
-        panel_w, panel_h = 200, 262
+
+        fs = self.hud_font_size
+        rh = fs                      # row height
+        pad = max(6, fs // 3)
+        gap = int(0.4 * rh)
+        comp_r = int(1.6 * fs)
+        panel_w = int(12 * fs)
+        # Height: header+status, 4 value rows, pos+goal+collision, compass.
+        panel_h = (pad + 2 * rh + gap + 4 * rh + gap + 3 * rh + int(0.5 * rh)
+                   + fs + 2 * comp_r + pad)
         panel = pygame.Surface((panel_w, panel_h), pygame.SRCALPHA)
         panel.fill((0, 0, 0, 140))
-        font = self._font
+        font = self._hud_font
+        arrow_len = max(8, int(0.5 * fs))
 
         def row(y, label, color, arrow_heading=None):
-            panel.blit(font.render(label, True, color), (8, y))
+            panel.blit(font.render(label, True, color), (pad, y))
             if arrow_heading is not None:
-                self._draw_arrow(panel, (panel_w - 18, y + 6), arrow_heading, 9, color)
+                self._draw_arrow(panel, (panel_w - pad - arrow_len, y + rh // 2 - 2),
+                                 arrow_heading, arrow_len, color)
 
-        y = 6
-        header = f"Run {self.hud_run}   Step {self.hud_step}"
-        row(y, header, text_color); y += 18
+        y = pad
+        row(y, f"Run {self.hud_run}   Step {self.hud_step}", text_color); y += rh
         if self.hud_status:
             row(y, self.hud_status, text_color)
-        y += 22
+        y += rh + gap
 
         if self.hud_action is not None:
             speed_cmd, heading_cmd = self.hud_action
             row(y, f"Cmd hdg: {math.degrees(heading_cmd) % 360:6.1f} deg", cmd_color, heading_cmd)
         else:
             row(y, "Cmd hdg:     -- deg", dim_color)
-        y += 18
+        y += rh
         if odom_state is not None:
             row(y, f"Mea hdg: {math.degrees(float(odom_state[2])) % 360:6.1f} deg", mea_color,
                 float(odom_state[2]))
         else:
             row(y, "Mea hdg:     -- deg", dim_color)
-        y += 18
+        y += rh
         if self.hud_action is not None:
             row(y, f"Cmd spd: {self.hud_action[0]:+.3f} m/s", cmd_color)
         else:
             row(y, "Cmd spd:     -- m/s", dim_color)
-        y += 18
+        y += rh
         if odom_state is not None:
             row(y, f"Mea spd: {float(odom_state[3]):+.3f} m/s", mea_color)
         else:
             row(y, "Mea spd:     -- m/s", dim_color)
-        y += 22
+        y += rh + gap
 
         if odom_state is not None:
             x_o, y_o = float(odom_state[0]), float(odom_state[1])
             dist = math.hypot(x_o - float(self.goal_pos[0]), y_o - float(self.goal_pos[1]))
-            row(y, f"Pos: ({x_o:+.2f}, {y_o:+.2f}) m", text_color); y += 18
-            row(y, f"Goal dist: {dist:.2f} m", text_color); y += 18
+            row(y, f"Pos: ({x_o:+.2f}, {y_o:+.2f}) m", text_color); y += rh
+            row(y, f"Goal dist: {dist:.2f} m", text_color); y += rh
         else:
-            row(y, "Pos:  --", dim_color); y += 18
-            row(y, "Goal dist:  --", dim_color); y += 18
+            row(y, "Pos:  --", dim_color); y += rh
+            row(y, "Goal dist:  --", dim_color); y += rh
         if self.hud_collision > 0.5:
             row(y, "COLLISION", alert_color)
         else:
             row(y, "no contact", dim_color)
-        y += 24
+        y += rh + int(0.5 * rh)
 
         # Compass: commanded (orange) vs measured (blue) heading needles
-        comp_r = 28
-        comp_cx, comp_cy = panel_w // 2, y + comp_r + 4
+        comp_cx, comp_cy = panel_w // 2, y + fs + comp_r
         pygame.draw.circle(panel, dim_color, (comp_cx, comp_cy), comp_r, 1)
-        panel.blit(font.render("N", True, dim_color), (comp_cx - 4, comp_cy - comp_r - 14))
+        n_surf = font.render("N", True, dim_color)
+        panel.blit(n_surf, (comp_cx - n_surf.get_width() // 2, comp_cy - comp_r - fs))
         pygame.draw.line(panel, dim_color, (comp_cx, comp_cy - comp_r),
-                         (comp_cx, comp_cy - comp_r + 4), 1)
+                         (comp_cx, comp_cy - comp_r + max(4, fs // 4)), 1)
         if odom_state is not None:
-            self._draw_arrow(panel, (comp_cx, comp_cy), float(odom_state[2]), comp_r - 6,
-                             mea_color, width=2)
+            self._draw_arrow(panel, (comp_cx, comp_cy), float(odom_state[2]),
+                             comp_r - max(6, fs // 3), mea_color, width=2)
         if self.hud_action is not None:
-            self._draw_arrow(panel, (comp_cx, comp_cy), self.hud_action[1], comp_r - 6,
-                             cmd_color, width=2)
+            self._draw_arrow(panel, (comp_cx, comp_cy), self.hud_action[1],
+                             comp_r - max(6, fs // 3), cmd_color, width=2)
 
         self.screen.blit(panel, (self.window_size[0] - panel_w - 8, 8))
 
