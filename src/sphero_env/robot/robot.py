@@ -223,6 +223,9 @@ class Robot(gym.Env):
         """
         super().reset(seed=seed)
 
+        # Calibrate compass to ensure heading is accurate. This may take a few seconds.
+        self.api.reset_aim()
+
         # Reset to origin with zero velocity
         x0 = 0.0
         y0 = 0.0
