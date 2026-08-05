@@ -494,7 +494,12 @@ class Robot(gym.Env):
         """
         Delegate rendering to the shared visualiser.
         """
-        self.vis.render(self.state_true, self.state_odom)
+        if self.last_command is not None:
+            heading_cmd, speed_cmd, _ = self.last_command
+            action = (speed_cmd, heading_cmd)
+        else:
+            action = None
+        self.vis.render(self.state_true, self.state_odom, action=action)
 
     def close(self):
         """

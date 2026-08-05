@@ -663,7 +663,12 @@ class SpheroEnv(gym.Env):
 
     def render(self):
         """Render the environment via Visualiser."""
-        self.vis.render(self.state_true, self.state_odom)
+        if self.last_command is not None:
+            heading_cmd, speed_cmd, _ = self.last_command
+            action = (speed_cmd, heading_cmd)
+        else:
+            action = None
+        self.vis.render(self.state_true, self.state_odom, action=action)
 
     def close(self):
         """Close the environment and clean up resources."""

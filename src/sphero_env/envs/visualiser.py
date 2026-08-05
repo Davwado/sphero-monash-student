@@ -164,7 +164,7 @@ class Visualiser:
         pygame.display.set_caption("Sphero Visualiser")
         self.clock = pygame.time.Clock()
 
-    def render(self, gt_state, odom_state):
+    def render(self, gt_state, odom_state, action=None):
         if self.render_mode != "human":
             return
         self._init_pygame()
@@ -339,6 +339,19 @@ class Visualiser:
         for idx, text in enumerate(legend_lines):
             surf = font.render(text, True, (220, 220, 220))
             self.screen.blit(surf, (5, 5 + 18 * idx))
+        # Action details
+        if action is not None:
+            speed_cmd = float(action[0])
+            heading_cmd = float(action[1])
+            action_font = pygame.font.SysFont(None, 36, bold=True)
+            action_lines = [
+                f"speed_cmd: {speed_cmd:.3f}",
+                f"heading_cmd: {math.degrees(heading_cmd):.1f} deg",
+            ]
+            line_h = 38
+            for idx, text in enumerate(action_lines):
+                surf = action_font.render(text, True, (255, 255, 0))
+                self.screen.blit(surf, (5, height - line_h * (len(action_lines) - idx)))
         pygame.display.flip()
         self.clock.tick(60)
 
