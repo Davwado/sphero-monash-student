@@ -26,6 +26,7 @@ class Visualiser:
         self._file = None
         self._writer = None
         self._columns = [
+            "t",
             "est_x", "est_y", "odom_x", "odom_y", "gt_x", "gt_y",
             "cov_x", "cov_y", "cov_xy", "cov_yx",
             "heading_cmd", "speed_cmd", "heading", "speed",
@@ -101,7 +102,7 @@ class Visualiser:
         self._overlay_odom_traj = _clean(odom)
         self._overlay_true_traj = _clean(true)
 
-    def record(self, gt_state, odom_state, action, est_state=None, est_cov=None, setpoint=None):
+    def record(self, gt_state, odom_state, action, est_state=None, est_cov=None, setpoint=None, t=None):
         # Append to trajectories
         if gt_state is not None:
             self._gt_traj.append(tuple(gt_state[:2]))
@@ -111,6 +112,7 @@ class Visualiser:
             self._est_traj.append(tuple(est_state[:2]))
         # Prepare log row
         row = {
+            "t": float(t) if t is not None else np.nan,
             "gt_x": float(gt_state[0]) if gt_state is not None else np.nan,
             "gt_y": float(gt_state[1]) if gt_state is not None else np.nan,
             "odom_x": float(odom_state[0]) if odom_state is not None else np.nan,

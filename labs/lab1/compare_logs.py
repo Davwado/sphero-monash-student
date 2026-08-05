@@ -10,12 +10,41 @@ DEFAULT_SIM_LOG = Path(__file__).resolve().parents[2] / "logs" / "lab1_sim.csv"
 DEFAULT_REAL_LOG = Path(__file__).resolve().parents[2] / "logs" / "lab1_real.csv"
 
 
+def get_timestamps(df: pd.DataFrame, csv_path: Path):
+    """Return the logged per-row time column ('t'), dropping rows without it.
+
+    Sim logs t = step_count * dt (evenly paced); real logs t = actual
+    wall-clock elapsed time (unevenly paced, since real steps aren't rate
+    limited to dt). There is no valid way to reconstruct either after the
+    fact, so logs missing 't' entirely can't be time-aligned.
+    """
+    if "t" not in df.columns or df["t"].isna().all():
+        raise SystemExit(
+            f"'{csv_path}' has no per-row timestamps ('t' column). "
+            "This log predates timestamp recording -- rerun lab1.py to "
+            "regenerate it before comparing timescales."
+        )
+    valid = df["t"].notna().to_numpy()
+    return df.index.to_numpy()[valid], df["t"].to_numpy()[valid]
+
+
 def plot_comparison(sim_csv: Path, real_csv: Path):
     sim = pd.read_csv(sim_csv)
     real = pd.read_csv(real_csv)
 
-    sim_t = sim.index * 0.1
-    real_t = real.index * 0.1
+    sim_idx, sim_t = get_timestamps(sim, sim_csv)
+    real_idx, real_t = get_timestamps(real, real_csv)
+    sim = sim.iloc[sim_idx]
+    real = real.iloc[real_idx]
+
+    # Sim logs far more points than the real robot (sim isn't rate-limited
+    # to dt, the real loop is slowed by Bluetooth round-trips), so only
+    # keep real rows whose timestamp actually falls within sim's time range
+    # -- otherwise the real trace would extend past what sim covers and
+    # mislead the time-axis comparison.
+    in_range = (real_t >= sim_t.min()) & (real_t <= sim_t.max())
+    real = real[in_range]
+    real_t = real_t[in_range]
 
     fig, axes = plt.subplots(2, 2, figsize=(12, 9))
 

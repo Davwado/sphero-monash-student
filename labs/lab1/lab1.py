@@ -16,7 +16,7 @@ def make_sim_env():
     return SpheroEnv(
         dt=0.1,
         max_steps=5000,
-        vel_limit=0.015,
+        vel_limit=0.15,
         world_width=5.0,
         world_height=5.0,
         goal_pos=(0.5, 0.5),
@@ -97,9 +97,10 @@ def control_loop(control_env):
             heading_angle = np.arctan2(control_env.goal_pos[1] - y_meas, control_env.goal_pos[0] - x_meas)
 
             # Creates action
-            action = [control_env.vel_limit, heading_angle]
+            action = [0.015, heading_angle]
 
         else:
+            input("Done. Press Enter to exit...")
             print("Ball is within the goal tolerance. Stopping the robot.")
 
             # Ball is within the goal tolerance, stop moving
