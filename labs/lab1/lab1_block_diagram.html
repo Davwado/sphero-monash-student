@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Lab 1 — code flow block diagram</title>
+<style>
+  body { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; max-width: 1100px; margin: 2rem auto; padding: 0 1.5rem; color: #1a1a1a; line-height: 1.6; }
+  h1 { font-size: 1.5rem; } h2 { font-size: 1.2rem; margin-top: 2.5rem; }
+  table { border-collapse: collapse; margin: 1rem 0; }
+  th, td { border: 1px solid #ccc; padding: 6px 12px; text-align: left; vertical-align: top; }
+  th { background: #f3f3f3; }
+  code { background: #f3f3f3; padding: 1px 5px; border-radius: 4px; font-size: 0.9em; }
+  .mermaid { margin: 1rem 0; }
+  .tip { background: #eef4fb; border: 1px solid #b5d4f4; border-radius: 8px; padding: 10px 14px; font-size: 0.95em; }
+  ul li { margin: 4px 0; }
+</style>
+</head>
+<body>
+<h1>Lab 1 — code flow block diagram</h1>
+<p class="tip">Zoom with <b>Ctrl</b> + mouse wheel (or Ctrl +/−). Diagrams are vector SVG, so they stay crisp at any zoom level.</p>
+<p>How <code>lab1.py</code> runs end to end. Run with <code>python lab1.py --sim</code> (simulation) or <code>python lab1.py</code> (real Sphero).</p>
+
+<h2>Key data formats</h2>
+<table>
+<tr><th>Data</th><th>Shape / meaning</th></tr>
+<tr><td><code>state</code></td><td><code>[x, y, heading, speed]</code> — metres, radians, m/s. Heading <code>0</code> points <b>+y</b>, positive rotates toward <b>+x</b> (matches Sphero heading degrees)</td></tr>
+<tr><td><code>action</code></td><td><code>[speed_cmd, heading_cmd]</code> — clipped by the env to speed ±0.15&nbsp;m/s, heading ±π rad</td></tr>
+<tr><td><code>obs</code></td><td><code>[x, y, heading, speed, collision_flag]</code> — odometry state + measurement noise (noise std = 0 in lab 1 sim)</td></tr>
+<tr><td><code>info</code> dict</td><td><code>state_true</code>, <code>state_odom</code>, <code>collision</code>, commands; the real robot also adds raw accel/gyro/velocity sensor dicts</td></tr>
+<tr><td>CSV logs</td><td><code>logs/lab1_sim.csv</code> or <code>logs/lab1_real.csv</code> — one row per <code>step()</code> (ground truth, odometry, action, estimate, setpoint)</td></tr>
+</table>
+
+<h2>Overall flow</h2>
+<pre class="mermaid">
+flowchart TD
+    subgraph LAB1["lab1.py"]
+        MAIN["main(argv)<br/>parses --sim flag"] --> ME["managed_env(sim)<br/>context manager: builds env,<br/>starts CSV logging, guarantees cleanup"]
+    end
+
+    ME -- "sim = True" --> MSE["make_sim_env() → SpheroEnv<br/>5×5 m world, dt=0.1 s, max 5000 steps<br/>goal (0.5, 0.5) ± 0.1 m, all noise = 0,<br/>no obstacles, pygame 800×800"]
+    ME -- "sim = False" --> SAC["scan_and_connect()<br/>(sphero_env/robot/connect.py)<br/>BLE scan, user picks a toy,<br/>returns (toy, SpheroEduAPI)"]
+
+    MSE --> DYN["dynamics.py — dynamics(state, action)<br/>unicycle model: heading set instantly,<br/>speed = clip(speed + speed_cmd·0.1, 0, 1),<br/>x += v·sin(θ)·0.1, y += v·cos(θ)·0.1"]
+    SAC --> MRE["make_real_env(api) → Robot<br/>(sphero_env/robot/robot.py)<br/>same Gym interface as SpheroEnv,<br/>state comes from robot odometry"]
+
+    DYN --> CL
+    MRE --> CL
+
+    subgraph CL["control_loop(env) — lab1.py"]
+        RESET["env.reset(seed=0)<br/>→ first obs; RNG seeded with 0"] --> ACT["action = rng.uniform(−1, 1, size=2)<br/>⚠ placeholder — replace with your controller"]
+        ACT --> STEP["env.step(action)<br/>→ obs, reward, terminated, truncated, info"]
+        STEP --> REN["env.render()<br/>pygame window"]
+        REN -- "repeat ×50" --> ACT
+        REN --> ESTOP["env.emergency_stop()<br/>speed → 0"]
+    end
+
+    ESTOP --> FIN["managed_env finally block<br/>stop_logging(), close()<br/>(real robot also gets set_speed(0))"]
+</pre>
+
+<h2>Inside <code>env.step(action)</code> — sim vs real</h2>
+<pre class="mermaid">
+flowchart TD
+    subgraph SIM["SpheroEnv.step()  (simulation)"]
+        S1["clip action to action_space<br/>speed ±0.15, heading ±π"] --> S2["run dynamics() twice<br/>state_true ← clean action<br/>state_odom ← action + process noise<br/>(noise std = 0 in lab 1, so they match)"]
+        S2 --> S3["collision check vs occupancy grid (None here),<br/>out-of-bounds ⇒ terminated,<br/>step ≥ max_steps ⇒ truncated,<br/>reward = −distance to goal"]
+        S3 --> S4["obs = odom + measurement noise<br/>[x, y, θ, v, collision_flag]"]
+        S4 --> S5["vis.record() → CSV row<br/>logs/lab1_sim.csv"]
+    end
+
+    subgraph REAL["Robot.step()  (real Sphero)"]
+        R1["clip action, convert:<br/>heading rad → deg (negative speed flips 180°),<br/>speed → raw 0–255 (|v|/0.15 · 255)"] --> R2["send over BLE:<br/>api.set_heading(), api.set_speed()"]
+        R2 --> R3["read sensors back:<br/>location (cm → m ÷100), heading (deg → rad),<br/>speed (÷255 · 0.15) ⇒ state_odom"]
+        R3 --> R4["_sense_collision()<br/>accel jerk + speed drop + gyro spikes<br/>vs tunable thresholds"]
+        R4 --> R5["obs = odom + noise, reward = None,<br/>info carries raw sensor dicts,<br/>vis.record() → logs/lab1_real.csv"]
+    end
+
+    S5 --> VIS["Visualiser (envs/visualiser.py) — shared by both<br/>pygame drawing: true pose green, odom blue,<br/>goal marker, belief ellipse if set;<br/>CSV logger: one row per control step"]
+    R5 --> VIS
+</pre>
+
+<h2>Points worth knowing before you edit</h2>
+<ul>
+  <li><b>Where your controller goes:</b> the <code>rng.uniform(-1, 1, 2)</code> line in <code>control_loop()</code> is the only thing meant to be replaced in lab 1. Compute <code>[speed_cmd, heading_cmd]</code> from <code>obs</code> instead.</li>
+  <li><b>Actions get clipped:</b> speed is clipped to ±0.15 m/s, so the random ±1.0 samples mostly saturate the speed command.</li>
+  <li><b>Heading convention:</b> 0 rad = +y ("north"), positive angles rotate toward +x. <code>wrap_angle()</code> keeps everything in [−π, π).</li>
+  <li><b><code>dynamics.py</code> is yours to improve:</b> the sim uses it for both ground truth and odometry. It snaps heading instantly, unlike <code>SpheroEnv._base_dynamics</code> which rate-limits turns and only translates when aligned.</li>
+  <li><b>Sim and real are interchangeable:</b> <code>SpheroEnv</code> and <code>Robot</code> expose the same <code>reset / step / render / emergency_stop</code> interface, so <code>control_loop</code> doesn't care which it gets.</li>
+  <li><b>Reward differs:</b> sim returns −distance_to_goal (minus collision penalty); the real robot returns <code>None</code>.</li>
+  <li><b>Logs:</b> every step appends a CSV row via the shared <code>Visualiser</code>; cleanup in <code>managed_env</code> closes the file, so let the program exit normally.</li>
+</ul>
+
+<script type="module">
+import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
+mermaid.initialize({ startOnLoad: true, theme: "neutral", flowchart: { htmlLabels: true } });
+</script>
+</body>
+</html>
