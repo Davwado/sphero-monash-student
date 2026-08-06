@@ -21,6 +21,8 @@ import controller
 
 from contextlib import ExitStack, contextmanager
 
+TIMING = False   # set by --timing: report where each loop iteration spends time
+
 IDLE_STATUS = "IDLE  R:run P:play S:save"
 REPLAY_HELP = ("Replay: LEFT/RIGHT step (hold to scroll), wheel/drag bar to scrub, "
                "HOME/END jump, SPACE play/pause, S save, ESC back, Q quit")
@@ -124,6 +126,40 @@ def save_last_run(sim: bool):
     print(f"Saved run to {dest}  (replay later with: python lab1.py --replay {dest})")
 
 
+def initial_heading_from_real_log(path="logs/lab1_real_latest.csv", min_move=0.01):
+    """Initial heading of the most recent physical run, in radians, or None.
+
+    Estimated from the direction of travel between the first two logged
+    positions that are at least `min_move` apart. The logged `heading` column
+    is not used: on hardware get_heading() echoes the last command rather than
+    measuring the shell's true orientation, so it does not reflect which way
+    the ball was actually facing at the start.
+    """
+    try:
+        with open(path, newline="") as f:
+            rows = list(csv.DictReader(f))
+    except OSError:
+        return None
+
+    pts = []
+    for r in rows:
+        try:
+            x, y = float(r["odom_x"]), float(r["odom_y"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if math.isfinite(x) and math.isfinite(y):
+            pts.append((x, y))
+
+    if len(pts) < 2:
+        return None
+    x0, y0 = pts[0]
+    for x, y in pts[1:]:
+        dx, dy = x - x0, y - y0
+        if math.hypot(dx, dy) >= min_move:
+            return math.atan2(dx, dy)   # 0 rad = +y convention
+    return None
+
+
 def run_one(env, sim: bool, run_idx: int, steps: int, seed: int):
     """Execute one control run.
 
@@ -150,7 +186,14 @@ def run_one(env, sim: bool, run_idx: int, steps: int, seed: int):
 
     result = "idle"
     try:
-        obs, _ = env.reset(seed=seed)
+        reset_options = None
+        if sim:
+            h0 = initial_heading_from_real_log()
+            if h0 is not None:
+                reset_options = {"heading0": h0}
+                print(f"Sim start heading matched to last real run: "
+                      f"{math.degrees(h0):.1f} deg")
+        obs, _ = env.reset(seed=seed, options=reset_options)
         for step in range(steps):
             aborted = False
             for event in pygame.event.get():
@@ -167,12 +210,14 @@ def run_one(env, sim: bool, run_idx: int, steps: int, seed: int):
             if aborted:
                 break
 
+            t_start = time.perf_counter()
             try:
                 action = controller.compute_action(obs, step)
             except Exception:
                 traceback.print_exc()
                 print("controller.compute_action crashed - run aborted.")
                 break
+            t_ctrl = time.perf_counter()
 
             try:
                 obs, _, terminated, truncated, info = env.step(action)
@@ -182,6 +227,12 @@ def run_one(env, sim: bool, run_idx: int, steps: int, seed: int):
                 traceback.print_exc()
                 print("env.step failed - run aborted.")
                 break
+            t_step = time.perf_counter()
+
+            if TIMING:
+                print(f"[timing] step {step}: controller "
+                      f"{(t_ctrl - t_start) * 1000:6.1f} ms | env.step "
+                      f"{(t_step - t_ctrl) * 1000:6.1f} ms")
 
             frames.append({
                 "gt": np.array(info["state_true"], dtype=np.float32),
@@ -395,7 +446,12 @@ def main(argv=None):
                         help="HUD text size (also +/- keys while running)")
     parser.add_argument("--replay", type=str, default=None, metavar="CSV",
                         help="Replay a saved run CSV (no robot connection)")
+    parser.add_argument("--timing", action="store_true",
+                        help="Print per-step controller vs env.step timings")
     args = parser.parse_args(argv)
+
+    global TIMING
+    TIMING = args.timing
 
     if args.replay:
         # Pure playback: no Bluetooth, no controller - just the window.

@@ -308,6 +308,8 @@ class SpheroEnv(gym.Env):
         x0, y0 = 0.0, 0.0
 
         heading0 = float(rng.uniform(-np.pi, np.pi))
+        if options and "heading0" in options:
+            heading0 = float(options["heading0"])
         speed0 = 0.0
 
         # No collision at reset
