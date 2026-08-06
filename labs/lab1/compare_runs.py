@@ -4,7 +4,7 @@ Usage (from the repo root or labs/lab1):
     python labs/lab1/compare_runs.py
     python labs/lab1/compare_runs.py path/to/sim.csv path/to/real.csv -o out.png
 
-Defaults to logs/lab1_sim.csv and logs/lab1_real.csv.
+Defaults to logs/lab1_sim_latest.csv and logs/lab1_real_latest.csv.
 Produces one figure: overlaid XY trajectories, distance-to-goal, speeds and
 headings vs step, plus the per-step sim-vs-real position RMSE (the lab's
 calibration metric). Works with any CSVs written by the Visualiser logger,
@@ -45,12 +45,15 @@ def load(path):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("sim_csv", nargs="?", default="logs/lab1_sim.csv")
-    ap.add_argument("real_csv", nargs="?", default="logs/lab1_real.csv")
+    ap.add_argument("sim_csv", nargs="?", default="logs/lab1_sim_latest.csv")
+    ap.add_argument("real_csv", nargs="?", default="logs/lab1_real_latest.csv")
     ap.add_argument("-o", "--out", default="logs/compare_sim_real.png")
     ap.add_argument("--no-show", action="store_true", help="Save the PNG only")
     args = ap.parse_args()
 
+    if os.path.abspath(args.sim_csv) == os.path.abspath(args.real_csv):
+        print("WARNING: sim and real point at the SAME file - RMSE will be 0 "
+              "and the comparison meaningless.")
     sim, real = load(args.sim_csv), load(args.real_csv)
 
     n = min(sim["n"], real["n"])
