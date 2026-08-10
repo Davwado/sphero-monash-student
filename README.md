@@ -9,7 +9,7 @@ Each lab has two components:
 1. **Automarked individual assessment**
 2. **Team demo on a real robot**
 
-Your mark is a combination of both components.
+Your mark is a combination of both components. Team demo is scaled by interview and the final project demo will be scaled by both interview and ITP
 
 The final project is submitted in teams and also consists of both a simulated demo and a real robot demo. Time on the real robots is intentionally limited — the goal is for you to conquer the **sim-to-real gap**.
 
