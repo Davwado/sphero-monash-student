@@ -16,7 +16,7 @@ each run starts fresh and runs with the same controller code are repeatable.
 """
 import numpy as np
 
-GOAL = np.array([0.5,0.5])
+GOAL = np.array([0,0])
 hold_heading = 0.0
 
 # _rng = np.random.default_rng(0)

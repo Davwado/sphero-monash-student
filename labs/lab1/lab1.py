@@ -48,6 +48,7 @@ def make_real_env(api):
     return Robot(
         api=api,
         dt=0.1,
+        sensor_interval_ms=50,   # sensor stream rate (50 ms = 20 Hz)
         max_steps=5000,
         vel_limit=0.15,
         world_width=5.0,
