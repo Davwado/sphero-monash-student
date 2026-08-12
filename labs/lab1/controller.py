@@ -16,7 +16,7 @@ each run starts fresh and runs with the same controller code are repeatable.
 """
 import numpy as np
 
-GOAL = np.array([0.5, 0.5])
+GOAL = np.array([1, -0.2])
 hold_heading = 0.0
 
 # _rng = np.random.default_rng(0)
@@ -38,5 +38,5 @@ def compute_action(obs, step):
         return np.array([0.0, hold_heading])  # Stop moving, keep heading
     else:
         hold_heading = heading_cmd #Update previous angle 
-        speed_cmd = np.clip(KP * dist, 0.0, 0.15)
+        speed_cmd = np.clip(KP * dist, 0.0, 0.1)
         return np.array([speed_cmd, heading_cmd])

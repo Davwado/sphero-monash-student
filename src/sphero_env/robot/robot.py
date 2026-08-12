@@ -248,9 +248,6 @@ class Robot(gym.Env):
         self.vis.reset()
         self.vis.set_goal(self.goal_pos)
 
-        # Calibrate compass to ensure heading is accurate. This may take a few seconds.
-        self.api.reset_aim()
-
         # Stop robot
         self.api.set_speed(0)
 

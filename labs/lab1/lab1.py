@@ -75,6 +75,7 @@ def managed_env(sim: bool):
             print(f"Selected: {selected_toy.name}")
 
             api = stack.enter_context(SpheroEduAPI(selected_toy))
+            api.reset_aim()
             real_env = make_real_env(api)
             try:
                 yield real_env
@@ -151,6 +152,17 @@ def run_one(env, sim: bool, run_idx: int, steps: int, seed: int):
     result = "idle"
     try:
         obs, _ = env.reset(seed=seed)
+
+        # controller.py is hot-reloaded above, so its GOAL can change between
+        # runs. reset() re-points the marker at the env's own goal_pos, so push
+        # the controller's goal in afterwards to keep the yellow dot, the logged
+        # setpoint and the goal-reached test all tracking the same target.
+        goal = getattr(controller, "GOAL", None)
+        if goal is not None:
+            env.goal_pos = np.asarray(goal, dtype=np.float32)
+            env.vis.set_goal(env.goal_pos)
+            env.set_current_setpoint(env.goal_pos)
+
         for step in range(steps):
             aborted = False
             for event in pygame.event.get():
