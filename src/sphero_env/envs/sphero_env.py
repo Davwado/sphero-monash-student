@@ -503,7 +503,8 @@ class SpheroEnv(gym.Env):
             est_state=self.latest_est_mean,
             est_cov=self.latest_est_cov,
             setpoint=self.current_setpoint,
-            t=self.step_count * self.dt,
+            collision=collision,
+            step_count=self.step_count,
         )
 
         return obs, reward, terminated, truncated, info
@@ -664,12 +665,7 @@ class SpheroEnv(gym.Env):
 
     def render(self):
         """Render the environment via Visualiser."""
-        if self.last_command is not None:
-            heading_cmd, speed_cmd, _ = self.last_command
-            action = (speed_cmd, heading_cmd)
-        else:
-            action = None
-        self.vis.render(self.state_true, self.state_odom, action=action)
+        self.vis.render(self.state_true, self.state_odom)
 
     def close(self):
         """Close the environment and clean up resources."""

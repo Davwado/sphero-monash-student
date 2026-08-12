@@ -223,9 +223,6 @@ class Robot(gym.Env):
         """
         super().reset(seed=seed)
 
-        # Calibrate compass to ensure heading is accurate. This may take a few seconds.
-        self.api.reset_aim()
-
         # Reset to origin with zero velocity
         x0 = 0.0
         y0 = 0.0
@@ -451,6 +448,8 @@ class Robot(gym.Env):
             est_state=self.latest_est_mean,
             est_cov=self.latest_est_cov,
             setpoint=self.current_setpoint,
+            collision=collision_detected,
+            step_count=self.step_count,
         )
 
         return obs, None, terminated, truncated, info
@@ -497,12 +496,7 @@ class Robot(gym.Env):
         """
         Delegate rendering to the shared visualiser.
         """
-        if self.last_command is not None:
-            heading_cmd, speed_cmd, _ = self.last_command
-            action = (speed_cmd, heading_cmd)
-        else:
-            action = None
-        self.vis.render(self.state_true, self.state_odom, action=action)
+        self.vis.render(self.state_true, self.state_odom)
 
     def close(self):
         """
