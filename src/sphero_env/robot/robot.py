@@ -451,6 +451,8 @@ class Robot(gym.Env):
             est_state=self.latest_est_mean,
             est_cov=self.latest_est_cov,
             setpoint=self.current_setpoint,
+            collision=collision_detected,
+            step_count=self.step_count,
         )
 
         return obs, None, terminated, truncated, info

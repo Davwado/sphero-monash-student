@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Lab 1 — code flow block diagram</title>
+<style>
+  html { background: #ffffff; color-scheme: light; }
+  body { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; max-width: 1100px; margin: 2rem auto; padding: 0 1.5rem; color: #1a1a1a; line-height: 1.6; background: #ffffff; }
+  h1 { font-size: 1.5rem; } h2 { font-size: 1.2rem; margin-top: 2.5rem; }
+  table { border-collapse: collapse; margin: 1rem 0; }
+  th, td { border: 1px solid #ccc; padding: 6px 12px; text-align: left; vertical-align: top; }
+  th { background: #f3f3f3; }
+  code { background: #f3f3f3; padding: 1px 5px; border-radius: 4px; font-size: 0.9em; }
+  .mermaid { margin: 1rem 0; }
+  .tip { background: #eef4fb; border: 1px solid #b5d4f4; border-radius: 8px; padding: 10px 14px; font-size: 0.95em; }
+  ul li { margin: 4px 0; }
+  :root { --font-mono: ui-monospace, "Cascadia Code", Consolas, "Courier New", monospace; }
+  .pseudo svg { max-width: 100%; height: auto; }
+  .pseudo .th { font: 500 14px system-ui, sans-serif; fill: #1a1a1a; }
+  .pseudo .ts { font: 12px system-ui, sans-serif; fill: #5f5e5a; }
+  .pseudo .t  { font: 14px system-ui, sans-serif; fill: #1a1a1a; }
+  .pseudo .arr { stroke: #888780; stroke-width: 1.5; fill: none; }
+  .pseudo rect { stroke-width: 1; }
+  .pseudo .c-purple rect { fill: #EEEDFE; stroke: #7F77DD; }
+  .pseudo .c-purple .th, .pseudo .c-purple .t { fill: #3C3489; }
+  .pseudo .c-purple .ts { fill: #534AB7; }
+  .pseudo .c-teal rect { fill: #E1F5EE; stroke: #1D9E75; }
+  .pseudo .c-teal .th, .pseudo .c-teal .t { fill: #085041; }
+  .pseudo .c-teal .ts { fill: #0F6E56; }
+  .pseudo .c-coral rect { fill: #FAECE7; stroke: #D85A30; }
+  .pseudo .c-coral .th, .pseudo .c-coral .t { fill: #712B13; }
+  .pseudo .c-coral .ts { fill: #993C1D; }
+  .pseudo .c-gray rect { fill: #F1EFE8; stroke: #888780; }
+  .pseudo .c-gray .th, .pseudo .c-gray .t { fill: #444441; }
+  .pseudo .c-gray .ts { fill: #5F5E5A; }
+</style>
+</head>
+<body>
+<h1>Lab 1 — code flow block diagram</h1>
+<p class="tip">Zoom with <b>Ctrl</b> + mouse wheel (or Ctrl +/−). Diagrams are vector SVG, so they stay crisp at any zoom level.</p>
+<p>How <code>lab1.py</code> runs end to end. Run with <code>python lab1.py --sim</code> (simulation) or <code>python lab1.py</code> (real Sphero).</p>
+
+<h2>Pseudo-code data flow — quick read</h2>
+<p>Reads top-to-bottom like the program executes. Small arrows show what data moves between lines; the tall <code>obs</code> arrow on the right is the step result feeding the next loop iteration. The teal and coral panels are the two interchangeable implementations of <code>env.step(action)</code>.</p>
+<div class="pseudo">
+<svg width="680" viewBox="0 0 680 912" role="img" xmlns="http://www.w3.org/2000/svg"><title>Lab 1 pseudo-code data flow</title>
+<defs><marker id="parrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M2 1L8 5L2 9" fill="none" stroke="#888780" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></marker></defs>
+
+<g class="c-purple"><rect x="40" y="40" width="570" height="130" rx="6"/>
+<text class="th" x="56" y="62">setup — main() and managed_env(sim)</text>
+<text class="t" x="56" y="84" style="font-family:var(--font-mono);font-size:12px">sim = (&quot;--sim&quot; in argv)</text>
+<text class="t" x="56" y="102" style="font-family:var(--font-mono);font-size:12px">if sim:  env = SpheroEnv(dt=0.1, 5×5 m, goal=(0.5, 0.5), noise=0)</text>
+<text class="t" x="56" y="120" style="font-family:var(--font-mono);font-size:12px">else:    toy = ble_scan_and_pick();  env = Robot(SpheroEduAPI(toy))</text>
+<text class="t" x="56" y="138" style="font-family:var(--font-mono);font-size:12px">env.set_log_path(&quot;logs/lab1_sim.csv&quot; or &quot;logs/lab1_real.csv&quot;)</text>
+<text class="t" x="56" y="156" style="font-family:var(--font-mono);font-size:12px">env.start_logging()      # on exit: stop_logging() + close()</text>
+</g>
+
+<line class="arr" x1="325" y1="170" x2="325" y2="188" marker-end="url(#parrow)"/>
+
+<g class="c-purple"><rect x="40" y="190" width="570" height="224" rx="6"/>
+<text class="th" x="56" y="212">control_loop(env)</text>
+<text class="t" x="56" y="236" style="font-family:var(--font-mono);font-size:12px">obs, info = env.reset(seed=0)</text>
+<line class="arr" x1="76" y1="244" x2="76" y2="266" marker-end="url(#parrow)"/>
+<text class="ts" x="96" y="259" style="font-family:var(--font-mono)">obs = [x, y, heading, speed, collision_flag]</text>
+<text class="t" x="56" y="284" style="font-family:var(--font-mono);font-size:12px">action = rng.uniform(-1, 1, size=2)   # ← put your controller here</text>
+<line class="arr" x1="76" y1="292" x2="76" y2="314" marker-end="url(#parrow)"/>
+<text class="ts" x="96" y="307" style="font-family:var(--font-mono)">action = [speed_cmd, heading_cmd]</text>
+<text class="t" x="56" y="332" style="font-family:var(--font-mono);font-size:12px">obs, reward, terminated, truncated, info = env.step(action)</text>
+<line class="arr" x1="76" y1="340" x2="76" y2="358" marker-end="url(#parrow)"/>
+<text class="t" x="56" y="376" style="font-family:var(--font-mono);font-size:12px">env.render()   # pygame window</text>
+<path class="arr" d="M290 372 L572 372 L572 278 L550 278" marker-end="url(#parrow)"/>
+<text class="ts" x="566" y="330" text-anchor="end" style="font-family:var(--font-mono)">×50</text>
+<text class="t" x="56" y="400" style="font-family:var(--font-mono);font-size:12px">env.emergency_stop()   # speed = 0 after the loop</text>
+</g>
+
+<line class="arr" x1="325" y1="414" x2="325" y2="434" marker-end="url(#parrow)"/>
+
+<g class="c-teal"><rect x="40" y="436" width="570" height="150" rx="6"/>
+<text class="th" x="56" y="458">env.step(action) — simulation (SpheroEnv)</text>
+<text class="t" x="56" y="480" style="font-family:var(--font-mono);font-size:12px">action = clip(action, speed ±0.15 m/s, heading ±π)</text>
+<text class="t" x="56" y="498" style="font-family:var(--font-mono);font-size:12px">state_true = dynamics(state_true, action)          # ground truth</text>
+<text class="t" x="56" y="516" style="font-family:var(--font-mono);font-size:12px">state_odom = dynamics(state_odom, action + noise)  # noise = 0 in lab 1</text>
+<text class="t" x="56" y="534" style="font-family:var(--font-mono);font-size:12px">collision / bounds checks;  reward = -dist_to_goal</text>
+<text class="t" x="56" y="552" style="font-family:var(--font-mono);font-size:12px">obs = state_odom + meas_noise = [x, y, heading, speed, collision]</text>
+<text class="t" x="56" y="570" style="font-family:var(--font-mono);font-size:12px">vis.record(state_true, state_odom, action) → logs/lab1_sim.csv</text>
+</g>
+
+<text class="ts" x="325" y="604" text-anchor="middle">— or, on the real robot —</text>
+
+<g class="c-coral"><rect x="40" y="614" width="570" height="186" rx="6"/>
+<text class="th" x="56" y="636">env.step(action) — real robot (Robot)</text>
+<text class="t" x="56" y="658" style="font-family:var(--font-mono);font-size:12px">heading_deg = degrees(heading_cmd) % 360   # negative speed → +180°</text>
+<text class="t" x="56" y="676" style="font-family:var(--font-mono);font-size:12px">speed_raw   = |speed_cmd| / 0.15 × 255     # scale to 0–255</text>
+<text class="t" x="56" y="694" style="font-family:var(--font-mono);font-size:12px">api.set_heading(heading_deg); api.set_speed(speed_raw) → BLE → Sphero</text>
+<text class="t" x="56" y="712" style="font-family:var(--font-mono);font-size:12px">x, y = api.get_location() / 100            # cm → m</text>
+<text class="t" x="56" y="730" style="font-family:var(--font-mono);font-size:12px">heading = radians(api.get_heading());  speed = get_speed()/255 × 0.15</text>
+<text class="t" x="56" y="748" style="font-family:var(--font-mono);font-size:12px">state_odom = [x, y, heading, speed];  collision = accel/gyro spikes</text>
+<text class="t" x="56" y="766" style="font-family:var(--font-mono);font-size:12px">obs = state_odom + meas_noise;  reward = None   # no ground truth</text>
+<text class="t" x="56" y="784" style="font-family:var(--font-mono);font-size:12px">vis.record(...) → logs/lab1_real.csv</text>
+</g>
+
+<path class="arr" d="M614 552 L628 552 L628 332 L616 332" marker-end="url(#parrow)"/>
+<path class="arr" d="M614 766 L628 766 L628 552"/>
+<text class="ts" x="621" y="324" text-anchor="middle" style="font-family:var(--font-mono)">obs</text>
+
+<g class="c-gray"><rect x="40" y="816" width="570" height="56" rx="6"/>
+<text class="th" x="56" y="838">Visualiser — shared by both paths</text>
+<text class="ts" x="56" y="856">pygame draw: true pose green, odom blue · writes one CSV row per step()</text>
+</g>
+</svg>
+</div>
+
+<h2>Key data formats</h2>
+<table>
+<tr><th>Data</th><th>Shape / meaning</th></tr>
+<tr><td><code>state</code></td><td><code>[x, y, heading, speed]</code> — metres, radians, m/s. Heading <code>0</code> points <b>+y</b>, positive rotates toward <b>+x</b> (matches Sphero heading degrees)</td></tr>
+<tr><td><code>action</code></td><td><code>[speed_cmd, heading_cmd]</code> — clipped by the env to speed ±0.15&nbsp;m/s, heading ±π rad</td></tr>
+<tr><td><code>obs</code></td><td><code>[x, y, heading, speed, collision_flag]</code> — odometry state + measurement noise (noise std = 0 in lab 1 sim)</td></tr>
+<tr><td><code>info</code> dict</td><td><code>state_true</code>, <code>state_odom</code>, <code>collision</code>, commands; the real robot also adds raw accel/gyro/velocity sensor dicts</td></tr>
+<tr><td>CSV logs</td><td><code>logs/lab1_sim.csv</code> or <code>logs/lab1_real.csv</code> — one row per <code>step()</code> (ground truth, odometry, action, estimate, setpoint)</td></tr>
+</table>
+
+<h2>Overall flow</h2>
+<pre class="mermaid">
+flowchart TD
+    subgraph LAB1["lab1.py"]
+        MAIN["main(argv)<br/>parses --sim flag"] --> ME["managed_env(sim)<br/>context manager: builds env,<br/>starts CSV logging, guarantees cleanup"]
+    end
+
+    ME -- "sim = True" --> MSE["make_sim_env() → SpheroEnv<br/>5×5 m world, dt=0.1 s, max 5000 steps<br/>goal (0.5, 0.5) ± 0.1 m, all noise = 0,<br/>no obstacles, pygame 800×800"]
+    ME -- "sim = False" --> SAC["scan_and_connect()<br/>(sphero_env/robot/connect.py)<br/>BLE scan, user picks a toy,<br/>returns (toy, SpheroEduAPI)"]
+
+    MSE --> DYN["dynamics.py — dynamics(state, action)<br/>unicycle model: heading set instantly,<br/>speed = clip(speed + speed_cmd·0.1, 0, 1),<br/>x += v·sin(θ)·0.1, y += v·cos(θ)·0.1"]
+    SAC --> MRE["make_real_env(api) → Robot<br/>(sphero_env/robot/robot.py)<br/>same Gym interface as SpheroEnv,<br/>state comes from robot odometry"]
+
+    DYN --> CL
+    MRE --> CL
+
+    subgraph CL["control_loop(env) — lab1.py"]
+        RESET["env.reset(seed=0)<br/>→ first obs; RNG seeded with 0"] --> ACT["action = rng.uniform(−1, 1, size=2)<br/>⚠ placeholder — replace with your controller"]
+        ACT --> STEP["env.step(action)<br/>→ obs, reward, terminated, truncated, info"]
+        STEP --> REN["env.render()<br/>pygame window"]
+        REN -- "repeat ×50" --> ACT
+        REN --> ESTOP["env.emergency_stop()<br/>speed → 0"]
+    end
+
+    ESTOP --> FIN["managed_env finally block<br/>stop_logging(), close()<br/>(real robot also gets set_speed(0))"]
+</pre>
+
+<h2>Inside <code>env.step(action)</code> — sim vs real</h2>
+<pre class="mermaid">
+flowchart TD
+    subgraph SIM["SpheroEnv.step()  (simulation)"]
+        S1["clip action to action_space<br/>speed ±0.15, heading ±π"] --> S2["run dynamics() twice<br/>state_true ← clean action<br/>state_odom ← action + process noise<br/>(noise std = 0 in lab 1, so they match)"]
+        S2 --> S3["collision check vs occupancy grid (None here),<br/>out-of-bounds ⇒ terminated,<br/>step ≥ max_steps ⇒ truncated,<br/>reward = −distance to goal"]
+        S3 --> S4["obs = odom + measurement noise<br/>[x, y, θ, v, collision_flag]"]
+        S4 --> S5["vis.record() → CSV row<br/>logs/lab1_sim.csv"]
+    end
+
+    subgraph REAL["Robot.step()  (real Sphero)"]
+        R1["clip action, convert:<br/>heading rad → deg (negative speed flips 180°),<br/>speed → raw 0–255 (|v|/0.15 · 255)"] --> R2["send over BLE:<br/>api.set_heading(), api.set_speed()"]
+        R2 --> R3["read sensors back:<br/>location (cm → m ÷100), heading (deg → rad),<br/>speed (÷255 · 0.15) ⇒ state_odom"]
+        R3 --> R4["_sense_collision()<br/>accel jerk + speed drop + gyro spikes<br/>vs tunable thresholds"]
+        R4 --> R5["obs = odom + noise, reward = None,<br/>info carries raw sensor dicts,<br/>vis.record() → logs/lab1_real.csv"]
+    end
+
+    S5 --> VIS["Visualiser (envs/visualiser.py) — shared by both<br/>pygame drawing: true pose green, odom blue,<br/>goal marker, belief ellipse if set;<br/>CSV logger: one row per control step"]
+    R5 --> VIS
+</pre>
+
+<h2>Points worth knowing before you edit</h2>
+<ul>
+  <li><b>Where your controller goes:</b> the <code>rng.uniform(-1, 1, 2)</code> line in <code>control_loop()</code> is the only thing meant to be replaced in lab 1. Compute <code>[speed_cmd, heading_cmd]</code> from <code>obs</code> instead.</li>
+  <li><b>Actions get clipped:</b> speed is clipped to ±0.15 m/s, so the random ±1.0 samples mostly saturate the speed command.</li>
+  <li><b>Heading convention:</b> 0 rad = +y ("north"), positive angles rotate toward +x. <code>wrap_angle()</code> keeps everything in [−π, π).</li>
+  <li><b><code>dynamics.py</code> is yours to improve:</b> the sim uses it for both ground truth and odometry. It snaps heading instantly, unlike <code>SpheroEnv._base_dynamics</code> which rate-limits turns and only translates when aligned.</li>
+  <li><b>Sim and real are interchangeable:</b> <code>SpheroEnv</code> and <code>Robot</code> expose the same <code>reset / step / render / emergency_stop</code> interface, so <code>control_loop</code> doesn't care which it gets.</li>
+  <li><b>Reward differs:</b> sim returns −distance_to_goal (minus collision penalty); the real robot returns <code>None</code>.</li>
+  <li><b>Logs:</b> every step appends a CSV row via the shared <code>Visualiser</code>; cleanup in <code>managed_env</code> closes the file, so let the program exit normally.</li>
+</ul>
+
+<script type="module">
+import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
+mermaid.initialize({ startOnLoad: true, theme: "neutral", flowchart: { htmlLabels: true } });
+</script>
+</body>
+</html>

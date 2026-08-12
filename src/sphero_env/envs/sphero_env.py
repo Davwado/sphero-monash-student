@@ -503,6 +503,8 @@ class SpheroEnv(gym.Env):
             est_state=self.latest_est_mean,
             est_cov=self.latest_est_cov,
             setpoint=self.current_setpoint,
+            collision=collision,
+            step_count=self.step_count,
         )
 
         return obs, reward, terminated, truncated, info
