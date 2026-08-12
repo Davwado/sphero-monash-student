@@ -5,7 +5,9 @@ from sphero_env.robot.robot import Robot
 from sphero_env.envs import SpheroEnv
 
 import argparse
+import time
 import numpy as np
+import dynamics as dyn
 from dynamics import *
 
 from contextlib import ExitStack, contextmanager
@@ -13,8 +15,9 @@ from contextlib import ExitStack, contextmanager
 LAB1_SEED = 0
 
 def make_sim_env():
+    sim_dt = 0.1
     return SpheroEnv(
-        dt=0.1,
+        dt=sim_dt,
         max_steps=5000,
         vel_limit=0.15,
         world_width=5.0,
@@ -22,7 +25,7 @@ def make_sim_env():
         goal_pos=(0.5, 0.5),
         goal_tolerance=0.1,
         occupancy_grid=None,
-        dynamics=dynamics,
+        dynamics=make_dynamics(dt=sim_dt),
         obs_noise_std_pos=0.00,
         process_noise_std_speed=0.00,
         process_noise_std_heading=0.00,
@@ -77,6 +80,11 @@ def control_loop(control_env):
     obs, _ = control_env.reset(seed=LAB1_SEED)
     rng = np.random.default_rng(LAB1_SEED)
 
+    start_time = time.perf_counter()
+    last_step_time = start_time
+    step_count = 0
+    min_step_time = float('inf')
+    max_step_time = 0.0
 
     # Bool for goal reached
     goal_reached = False
@@ -116,6 +124,25 @@ def control_loop(control_env):
         # Execute the action in the environment
         control_env.render()
 
+        current_time = time.perf_counter()
+        step_duration = current_time - last_step_time
+        last_step_time = current_time
+        min_step_time = min(min_step_time, step_duration)
+        max_step_time = max(max_step_time, step_duration)
+
+        step_count += 1
+        if step_count % 10 == 0:
+            total_time = current_time - start_time
+            actual_rate = step_count / total_time
+            print(f"actual average sampling rate = {actual_rate:.3f} Hz ({step_count} steps in {total_time:.3f} s)")
+            print(f"step duration min={min_step_time:.3f}s max={max_step_time:.3f}s")
+
+    total_time = time.perf_counter() - start_time
+    if step_count > 0:
+        actual_rate = step_count / total_time
+        print(f"actual average sampling rate = {actual_rate:.3f} Hz ({step_count} steps in {total_time:.3f} s)")
+        print(f"step duration min={min_step_time:.3f}s max={max_step_time:.3f}s")
+
     control_env.emergency_stop()
 
 
@@ -125,6 +152,9 @@ def main(argv=None):
     args = parser.parse_args(argv)
 
     with managed_env(args.sim) as control_env:
+        # Print the environment timestep once (avoid printing inside dynamics)
+        print("env.dt =", control_env.dt, "s ->", 1.0 / control_env.dt, "Hz")
+        print("target polling rate =", dyn.TARGET_POLL_HZ, "Hz")
         control_loop(control_env)
 
 if __name__ == "__main__":
