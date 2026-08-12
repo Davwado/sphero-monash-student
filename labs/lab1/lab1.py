@@ -48,7 +48,6 @@ def make_real_env(api):
     return Robot(
         api=api,
         dt=0.1,
-        sensor_interval_ms=50,   # sensor stream rate (50 ms = 20 Hz)
         max_steps=5000,
         vel_limit=0.15,
         world_width=5.0,
@@ -182,10 +181,13 @@ def run_one(env, sim: bool, run_idx: int, steps: int, seed: int):
 
             try:
                 action = controller.compute_action(obs, step)
+
             except Exception:
                 traceback.print_exc()
                 print("controller.compute_action crashed - run aborted.")
                 break
+            if action[0] == "Stop":
+                continue    
 
             try:
                 obs, _, terminated, truncated, info = env.step(action)
