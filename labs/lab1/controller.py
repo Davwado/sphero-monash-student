@@ -16,7 +16,7 @@ each run starts fresh and runs with the same controller code are repeatable.
 """
 import numpy as np
 
-GOAL = np.array([1, -0.2])
+GOAL = np.array([-1,0])
 hold_heading = 0.0
 
 # _rng = np.random.default_rng(0)
@@ -32,7 +32,7 @@ def compute_action(obs, step):
     dy = GOAL[1] - obs[1]
     heading_cmd = np.arctan2(dx, dy)   # 0 rad = +y convention -> atan2(dx, dy)
     dist = np.hypot(dx, dy)
-    KP = 0.1
+    KP = 0.05
     if dist < 0.05:
         print("Goal reached!")
         return np.array([0.0, hold_heading])  # Stop moving, keep heading
