@@ -34,12 +34,12 @@ def compute_action(env, obs, step):
     dy = env.goal_pos[1] - obs[1]
     dist = np.hypot(dx, dy)
     KP = 0.075
-    if dist < 0.05:
+    if dist < 0.1:
         # print("Goal reached!")
         # return np.array([0.0, hold_heading])  # Stop moving, keep heading
         return ["Stop","Stop"]
     else:
         heading_cmd = np.arctan2(dx, dy)   # 0 rad = +y convention -> atan2(dx, dy)
         hold_heading = heading_cmd #Update previous angle 
-        speed_cmd = np.clip(KP * dist, 0.0, 0.15)
+        speed_cmd = np.clip(KP * dist, 0.01, env.vel_limit)  # Avoid zero speed (stuck) and clip to max speed
         return np.array([speed_cmd, heading_cmd])

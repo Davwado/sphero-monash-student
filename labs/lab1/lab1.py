@@ -234,11 +234,11 @@ def run_one(env, sim: bool, run_idx: int, steps: int, seed: int):
                     # Goal reached: send the stop command once, then never
                     # command the robot again - just keep logging so the run
                     # still fills out to `steps` rows.
-                    if not goal_stopped:
-                        env.emergency_stop()
-                        goal_stopped = True
+                    # env.emergency_stop()
+                    goal_stopped = True
                     obs, info = _poll_and_record(env)
                     terminated, truncated = False, False
+                    continue
                 else:
                     if action[0] == "Stop":
                         # Hold the current heading instead of snapping to 0 -
