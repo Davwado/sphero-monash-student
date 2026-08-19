@@ -241,7 +241,10 @@ def run_one(env, sim: bool, run_idx: int, steps: int, seed: int):
                     terminated, truncated = False, False
                 else:
                     if action[0] == "Stop":
-                        action = np.array([0.0, 0.0], dtype=np.float32)
+                        # Hold the current heading instead of snapping to 0 -
+                        # avoids kicking the sim off in a new direction while
+                        # it still has residual speed to bleed off.
+                        action = np.array([0.0, obs[2]], dtype=np.float32)
                     obs, _, terminated, truncated, info = env.step(action)
             except Exception:
                 # Covers BLE timeouts/disconnects on the real robot. We never
