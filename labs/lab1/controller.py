@@ -37,5 +37,5 @@ def compute_action(env, obs, step):
     else:
         heading_cmd = np.arctan2(dx, dy)   # 0 rad = +y convention -> atan2(dx, dy)
         hold_heading = heading_cmd #Update previous angle 
-        speed_cmd = np.clip(KP * dist, 0.0, 0.15)
+        speed_cmd = np.clip(KP * dist, 0.01, env.vel_limit)  # Avoid zero speed (stuck) and clip to max speed
         return np.array([speed_cmd, heading_cmd])
