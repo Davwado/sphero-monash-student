@@ -17,7 +17,7 @@ def dynamics(state, action):
         speed_cmd, heading_cmd = action
         # Simple unicycle model dynamics
         heading_new = wrap_angle(heading_cmd)
-        speed_new = np.clip(speed + speed_cmd * 0.1, 0, 1.0)
+        speed_new = np.clip(speed + speed_cmd * 0.4, 0, 1.0)
         x_new = x + speed_new * np.sin(heading_new) * 0.1
         y_new = y + speed_new * np.cos(heading_new) * 0.1
         return np.array([x_new, y_new, heading_new, speed_new], dtype=np.float32)

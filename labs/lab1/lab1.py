@@ -125,6 +125,48 @@ def save_last_run(sim: bool):
     print(f"Saved run to {dest}  (replay later with: python lab1.py --replay {dest})")
 
 
+def _poll_and_record(env):
+    """Log a step for the real robot without sending any drive command.
+
+    Reads the robot's current position/heading/speed and appends a log row,
+    but never calls set_heading/set_speed - used once the goal is reached so
+    the robot stops trying to hold a heading while data keeps recording.
+    """
+    location = env.api.get_location()
+    heading = env._heading_deg_to_rad(env.api.get_heading())
+    speed = (env.api.get_speed() / 255.0) * env.vel_limit
+
+    if isinstance(location, dict):
+        x_new = float(location.get("x", 0.0)) / 100.0
+        y_new = float(location.get("y", 0.0)) / 100.0
+    else:
+        x_new, y_new = 0.0, 0.0
+
+    env.state_odom = np.array([x_new, y_new, heading, speed], dtype=np.float32)
+    env.state_true = env.state_odom.copy()
+
+    obs = env._get_observation()
+    env.last_obs = obs.copy()
+
+    env.vis.record(
+        gt_state=env.state_true,
+        odom_state=env.state_odom,
+        action=np.array([0.0, 0.0], dtype=np.float32),
+        est_state=env.latest_est_mean,
+        est_cov=env.latest_est_cov,
+        setpoint=env.current_setpoint,
+    )
+
+    info = {
+        "state_true": env.state_true.copy(),
+        "state_odom": env.state_odom.copy(),
+        "collision": False,
+        "speed_cmd": 0.0,
+        "heading_cmd": 0.0,
+    }
+    return obs, info
+
+
 def run_one(env, sim: bool, run_idx: int, steps: int, seed: int):
     """Execute one control run.
 
@@ -150,6 +192,7 @@ def run_one(env, sim: bool, run_idx: int, steps: int, seed: int):
     print(f"Run {run_idx}: {steps} steps (seed={seed})")
 
     result = "idle"
+    goal_stopped = False
     try:
         obs, _ = env.reset(seed=seed)
 
@@ -186,11 +229,20 @@ def run_one(env, sim: bool, run_idx: int, steps: int, seed: int):
                 traceback.print_exc()
                 print("controller.compute_action crashed - run aborted.")
                 break
-            if action[0] == "Stop":
-                continue    
-
             try:
-                obs, _, terminated, truncated, info = env.step(action)
+                if action[0] == "Stop" and not sim:
+                    # Goal reached: send the stop command once, then never
+                    # command the robot again - just keep logging so the run
+                    # still fills out to `steps` rows.
+                    if not goal_stopped:
+                        env.emergency_stop()
+                        goal_stopped = True
+                    obs, info = _poll_and_record(env)
+                    terminated, truncated = False, False
+                else:
+                    if action[0] == "Stop":
+                        action = np.array([0.0, 0.0], dtype=np.float32)
+                    obs, _, terminated, truncated, info = env.step(action)
             except Exception:
                 # Covers BLE timeouts/disconnects on the real robot. We never
                 # auto-reconnect; stop and drop back to idle.
