@@ -229,6 +229,21 @@ class SpheroEnv(gym.Env):
         self.current_setpoint = setpoint_arr[:2].copy()
         self._use_custom_setpoint = True
 
+    def set_goal(self, goal_xy):
+        """Set the target this env drives to.
+
+        Updates the goal used by controllers and the goal-reached test, moves
+        the marker in the visualiser, and re-points the logged setpoint at the
+        new goal unless a custom setpoint is currently in force.
+        """
+        goal_arr = np.asarray(goal_xy, dtype=np.float32).reshape(-1)
+        if goal_arr.shape[0] < 2:
+            raise ValueError("goal_xy must contain at least 2 values [x, y].")
+        self.goal_pos = goal_arr[:2].copy()
+        if not self._use_custom_setpoint:
+            self.current_setpoint = self.goal_pos.copy()
+        self.vis.set_goal(self.goal_pos)
+
     def update_estimate(
         self,
         est_mean: Optional[np.ndarray] = None,
