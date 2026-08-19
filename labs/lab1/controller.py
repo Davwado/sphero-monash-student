@@ -16,20 +16,22 @@ each run starts fresh and runs with the same controller code are repeatable.
 """
 import numpy as np
 
-GOAL = np.array([0.5,0.5])
 hold_heading = 0
 
 # _rng = np.random.default_rng(0)
 
 
-def compute_action(obs, step):
+def compute_action(env, obs, step):
     """Return action = [speed_cmd, heading_cmd] for the current observation."""
     # Default: random action for testing. Replace with your control law.
     # return _rng.uniform(low=-1.0, high=1.0, size=2)
     global hold_heading
+
+    
+    
     # --- P-controller-to-goal skeleton (uncomment and tune) ---
-    dx = GOAL[0] - obs[0]
-    dy = GOAL[1] - obs[1]
+    dx = env.goal_pos[0] - obs[0]
+    dy = env.goal_pos[1] - obs[1]
     dist = np.hypot(dx, dy)
     KP = 0.075
     if dist < 0.05:

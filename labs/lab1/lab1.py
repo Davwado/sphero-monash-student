@@ -223,7 +223,7 @@ def run_one(env, sim: bool, run_idx: int, steps: int, seed: int):
                 break
 
             try:
-                action = controller.compute_action(obs, step)
+                action = controller.compute_action(env, obs, step)
 
             except Exception:
                 traceback.print_exc()
