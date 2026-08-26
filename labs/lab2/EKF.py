@@ -56,6 +56,41 @@ class EKF:
         self.Q = np.diag([0.001, 0.001, 0.001, 0.001])  # Process noise covariance
         self.R = np.diag([0.005, 0.005])  # Measurement noise covariance
 
+    def jacobian(self, state, action):
+        """
+        Compute the Jacobian of the dynamics function with respect to the state.
+
+        This is used in the EKF prediction step to linearize the dynamics around
+        the current state estimate.
+        """
+        # add jacobian here. this will be a matrix of partial deivatives of state variables (x,y,heaeding,speed) wrt each other 
+        x, y, heading, speed = state[0], state[1], state[2], state[3]
+        # dtheta'/dtheta within limits inside trun_rate a = 0
+        if (heading > -MAX_TURN_RATE) and (heading < MAX_TURN_RATE):
+            a = 1
+        else:
+            a = 0
+
+        #dv'/dv = b
+        if (speed > -MAX_TURN_RATE) and (speed < MAX_TURN_RATE):
+            b = 0
+        else:
+            b = 1
+
+        heading_error = wrap_angle(action[1] - heading) 
+        # c = dv'/dtheta
+        if ((speed <= -MAX_TURN_RATE) and (speed >= MAX_TURN_RATE) and np.cos(self.heading_error) > 0):
+            c = action[0]*np.sin(heading_error)
+        else:
+            0
+
+        J = np.array([[1, 0, speed*np.cos(heading)*self.dt * a, np.sin(heading)], 
+                             [0, 1, -speed*np.sin(heading)*self.dt * a, 0]
+                             [0, 0, a, 0]
+                             [0, 0, b, b]])
+
+        return J  # Identity matrix as a placeholder
+    
     def predict(self, action):
         """
         Predict the next state and covariance given a control action.
@@ -72,7 +107,7 @@ class EKF:
         self.state_est = dynamics(self.state_est, action)
 
         # Update the covariance matrix using a simple linear approximation of the dynamics
-        self.P = self.P # Replace this with a proper Jacobian-based update
+        self.P = self.jacobian(self, self.state, action) @ self.P @ self.jacobian(self, self.state, action).T + self.Q  # Replace this with a proper Jacobian calculation
         return self.state_est, self.P
 
     def update(self, measurement):
@@ -88,7 +123,8 @@ class EKF:
                              and columns correspond to [x, y, heading, speed]
         """
         # Update the state estimate with a new measurement
-
+        
+        
         self.state_est = self.state_est  # Replace this with a proper Kalman gain update
         self.P = self.P  # Replace this with a proper covariance update
 
