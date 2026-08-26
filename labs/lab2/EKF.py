@@ -107,7 +107,7 @@ class EKF:
         self.state_est = dynamics(self.state_est, action)
 
         # Update the covariance matrix using a simple linear approximation of the dynamics
-        self.P = self.jacobian(self, action) @ self.P @ self.jacobian(self, action).T + self.Q  # Replace this with a proper Jacobian calculation
+        self.P = self.jacobian(action) @ self.P @ self.jacobian(action).T + self.Q  # Replace this with a proper Jacobian calculation
         return self.state_est, self.P
 
     def update(self, measurement):
@@ -115,7 +115,7 @@ class EKF:
         Correct the state estimate with a new measurement.
         """
         # Measurement model is identity: measurement directly observes the state
-        H = np.eye(4)
+        H = np.array([[1, 0, 0, 0],[0, 1, 0, 0]])
 
         # 1. Innovation: difference between actual measurement and predicted state
         innovation = measurement - H @ self.state_est
