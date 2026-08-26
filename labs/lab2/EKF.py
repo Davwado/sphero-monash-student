@@ -56,7 +56,7 @@ class EKF:
         self.Q = np.diag([0.001, 0.001, 0.001, 0.001])  # Process noise covariance
         self.R = np.diag([0.005, 0.005])  # Measurement noise covariance
 
-    def jacobian(self, state, action):
+    def jacobian(self, action):
         """
         Compute the Jacobian of the dynamics function with respect to the state.
 
@@ -64,7 +64,7 @@ class EKF:
         the current state estimate.
         """
         # add jacobian here. this will be a matrix of partial deivatives of state variables (x,y,heaeding,speed) wrt each other 
-        x, y, heading, speed = state[0], state[1], state[2], state[3]
+        x, y, heading, speed = self.state_est[0], self.state_est[1], self.state_est[2], self.state_est[3]
         # dtheta'/dtheta within limits inside trun_rate a = 0
         if (heading > -MAX_TURN_RATE) and (heading < MAX_TURN_RATE):
             a = 1
@@ -79,14 +79,14 @@ class EKF:
 
         heading_error = wrap_angle(action[1] - heading) 
         # c = dv'/dtheta
-        if ((speed <= -MAX_TURN_RATE) and (speed >= MAX_TURN_RATE) and np.cos(self.heading_error) > 0):
+        if ((speed <= -MAX_TURN_RATE) and (speed >= MAX_TURN_RATE) and np.cos(heading_error) > 0):
             c = action[0]*np.sin(heading_error)
         else:
             0
 
         J = np.array([[1, 0, speed*np.cos(heading)*self.dt * a, np.sin(heading)], 
-                             [0, 1, -speed*np.sin(heading)*self.dt * a, 0]
-                             [0, 0, a, 0]
+                             [0, 1, -speed*np.sin(heading)*self.dt * a, 0],
+                             [0, 0, a, 0],
                              [0, 0, b, b]])
 
         return J  # Identity matrix as a placeholder
@@ -107,55 +107,29 @@ class EKF:
         self.state_est = dynamics(self.state_est, action)
 
         # Update the covariance matrix using a simple linear approximation of the dynamics
-        self.P = self.jacobian(self, self.state, action) @ self.P @ self.jacobian(self, self.state, action).T + self.Q  # Replace this with a proper Jacobian calculation
+        self.P = self.jacobian(self, action) @ self.P @ self.jacobian(self, action).T + self.Q  # Replace this with a proper Jacobian calculation
         return self.state_est, self.P
 
-    import numpy as np
+    def update(self, measurement):
+        """
+        Correct the state estimate with a new measurement.
+        """
+        # Measurement model is identity: measurement directly observes the state
+        H = np.eye(4)
 
-def predict(self, action):
-    """
-    Predict the next state and covariance given a control action.
-    """
-    # 1. Predict the next state using the dynamics function
-    self.state_est = dynamics(self.state_est, action)
+        # 1. Innovation: difference between actual measurement and predicted state
+        innovation = measurement - H @ self.state_est
 
-    # 2. Compute the Jacobian F of dynamics() at the current state/action
-    x, y, heading, speed = self.state_est
-    dt = self.dt  # adjust if your dt is stored/passed differently
+        # 2. Innovation covariance
+        S = H @ self.P @ H.T + self.R
 
-    F = np.array([
-        [1, 0, -speed * np.sin(heading) * dt, np.cos(heading) * dt],
-        [0, 1,  speed * np.cos(heading) * dt, np.sin(heading) * dt],
-        [0, 0, 1, 0],
-        [0, 0, 0, 1]
-    ])
+        # 3. Kalman gain
+        K = self.P @ H.T @ np.linalg.inv(S)
 
-    # 3. Propagate the covariance using the Jacobian
-    self.P = F @ self.P @ F.T + self.Q
+        # 4. Correct the state estimate
+        self.state_est = self.state_est + K @ innovation
 
-    return self.state_est, self.P
+        # 5. Correct the covariance
+        self.P = (np.eye(4) - K @ H) @ self.P
 
-
-def update(self, measurement):
-    """
-    Correct the state estimate with a new measurement.
-    """
-    # Measurement model is identity: measurement directly observes the state
-    H = np.eye(4)
-
-    # 1. Innovation: difference between actual measurement and predicted state
-    innovation = measurement - H @ self.state_est
-
-    # 2. Innovation covariance
-    S = H @ self.P @ H.T + self.R
-
-    # 3. Kalman gain
-    K = self.P @ H.T @ np.linalg.inv(S)
-
-    # 4. Correct the state estimate
-    self.state_est = self.state_est + K @ innovation
-
-    # 5. Correct the covariance
-    self.P = (np.eye(4) - K @ H) @ self.P
-
-    return self.state_est, self.P
+        return self.state_est, self.P
