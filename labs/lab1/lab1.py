@@ -207,11 +207,17 @@ def run_one(env, sim: bool, run_idx: int, steps: int, seed: int):
                 traceback.print_exc()
                 print("controller.compute_action crashed - run aborted.")
                 break
-            if action[0] == "Stop":
-                continue    
-
             try:
-                obs, _, terminated, truncated, info = env.step(action)
+                if action[0] == "Stop" and not sim:
+                    # Goal reached stops
+                    obs, info = _poll_and_record(env)
+                    terminated, truncated = False, False
+                    continue
+                else:
+                    if action[0] == "Stop":
+                        # Hold the current heading instead of snapping to 0
+                        action = np.array([0.0, obs[2]], dtype=np.float32)
+                    obs, _, terminated, truncated, info = env.step(action)
             except Exception:
                 # Covers BLE timeouts/disconnects on the real robot. We never
                 # auto-reconnect; stop and drop back to idle.

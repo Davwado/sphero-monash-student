@@ -3,15 +3,22 @@
 Usage (from the repo root or labs/lab1):
     python labs/lab1/compare_runs.py
     python labs/lab1/compare_runs.py path/to/sim.csv path/to/real.csv -o out.png
+    python labs/lab1/compare_runs.py --overlay-saved-real
+    python labs/lab1/compare_runs.py --saved-real logs/saved/lab1_real_*.csv
 
 Defaults to logs/lab1_sim_latest.csv and logs/lab1_real_latest.csv.
 Produces one figure: overlaid XY trajectories, distance-to-goal, speeds and
 headings vs step, plus the per-step sim-vs-real position RMSE (the lab's
 calibration metric). Works with any CSVs written by the Visualiser logger,
 including files saved with the S key.
+
+--overlay-saved-real (or --saved-real PATH [PATH ...]) additionally draws
+every past real run from logs/saved/ as faint gray background traces, so you
+can see run-to-run real-robot variability alongside the sim/real comparison.
 """
 import argparse
 import csv
+import glob
 import math
 import os
 
@@ -49,12 +56,28 @@ def main():
     ap.add_argument("real_csv", nargs="?", default="logs/lab1_real_latest.csv")
     ap.add_argument("-o", "--out", default="logs/compare_sim_real.png")
     ap.add_argument("--no-show", action="store_true", help="Save the PNG only")
+    ap.add_argument("--overlay-saved-real", action="store_true",
+                     help="Overlay every past real run in logs/saved/ (lab1_real_*.csv) "
+                          "as faint background traces")
+    ap.add_argument("--saved-real", nargs="*", default=None,
+                     help="Explicit saved real CSVs to overlay (overrides --overlay-saved-real's auto-glob)")
     args = ap.parse_args()
 
     if os.path.abspath(args.sim_csv) == os.path.abspath(args.real_csv):
         print("WARNING: sim and real point at the SAME file - RMSE will be 0 "
               "and the comparison meaningless.")
     sim, real = load(args.sim_csv), load(args.real_csv)
+
+    saved_paths = []
+    if args.saved_real:
+        saved_paths = args.saved_real
+    elif args.overlay_saved_real:
+        saved_paths = sorted(glob.glob("logs/saved/lab1_real_*.csv"))
+    # Don't re-plot whichever file is already the primary "real" trace.
+    saved_paths = [p for p in saved_paths if os.path.abspath(p) != os.path.abspath(args.real_csv)]
+    saved_runs = [(p, load(p)) for p in saved_paths]
+    if saved_paths:
+        print(f"Overlaying {len(saved_runs)} saved real run(s) from logs/saved/")
 
     n = min(sim["n"], real["n"])
     rmse = float(np.sqrt(np.nanmean(
@@ -67,6 +90,9 @@ def main():
         fontsize=11)
 
     ax = axes[0][0]
+    for i, (p, s) in enumerate(saved_runs):
+        ax.plot(s["x"], s["y"], "-", color="lightgray", alpha=0.5, lw=1, zorder=0,
+                label="saved real runs" if i == 0 else None)
     ax.plot(sim["x"], sim["y"], ".-", color="tab:green", label="sim")
     ax.plot(real["x"], real["y"], ".-", color="tab:blue", label="real")
     ax.plot(sim["x"][0], sim["y"][0], "s", color="tab:green")
@@ -78,6 +104,9 @@ def main():
     ax.axis("equal"); ax.grid(alpha=0.3); ax.legend()
 
     ax = axes[0][1]
+    for i, (p, s) in enumerate(saved_runs):
+        ax.plot(np.hypot(s["x"] - GOAL[0], s["y"] - GOAL[1]), color="lightgray", alpha=0.5,
+                lw=1, zorder=0, label="saved real runs" if i == 0 else None)
     ax.plot(np.hypot(sim["x"] - GOAL[0], sim["y"] - GOAL[1]), color="tab:green", label="sim")
     ax.plot(np.hypot(real["x"] - GOAL[0], real["y"] - GOAL[1]), color="tab:blue", label="real")
     ax.axhline(GOAL_TOL, color="gold", ls="--", label=f"tolerance {GOAL_TOL} m")
@@ -85,6 +114,9 @@ def main():
     ax.set_xlabel("step"); ax.set_ylabel("dist [m]"); ax.grid(alpha=0.3); ax.legend()
 
     ax = axes[1][0]
+    for i, (p, s) in enumerate(saved_runs):
+        ax.plot(s["speed"], color="lightgray", alpha=0.5, lw=1, zorder=0,
+                label="saved real runs" if i == 0 else None)
     ax.plot(sim["speed"], color="tab:green", label="sim measured")
     ax.plot(real["speed"], color="tab:blue", label="real measured")
     ax.plot(sim["speed_cmd"], color="tab:green", ls=":", alpha=0.7, label="sim cmd")
@@ -93,6 +125,9 @@ def main():
     ax.set_xlabel("step"); ax.set_ylabel("speed [m/s]"); ax.grid(alpha=0.3); ax.legend()
 
     ax = axes[1][1]
+    for i, (p, s) in enumerate(saved_runs):
+        ax.plot(np.degrees(s["heading"]), color="lightgray", alpha=0.5, lw=1, zorder=0,
+                label="saved real runs" if i == 0 else None)
     ax.plot(np.degrees(sim["heading"]), color="tab:green", label="sim measured")
     ax.plot(np.degrees(real["heading"]), color="tab:blue", label="real measured")
     ax.plot(np.degrees(sim["heading_cmd"]), color="tab:green", ls=":", alpha=0.7, label="sim cmd")

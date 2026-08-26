@@ -23,22 +23,26 @@ def compute_action(env, obs, step):
     # Default: random action for testing. Replace with your control law.
     # return _rng.uniform(low=-1.0, high=1.0, size=2)
     global hold_heading
-
-    
     
     # --- P-controller-to-goal skeleton (uncomment and tune) ---
+    # dx = env.goal_pos[0] - obs[0]
+    # dy = env.goal_pos[1] - obs[1]
+    # current_speed = obs[3]
+
+    # dist = np.hypot(dx, dy)
+    # KP = 0.09
+    # KD = 0.25  # tune this
+
     dx = env.goal_pos[0] - obs[0]
     dy = env.goal_pos[1] - obs[1]
-    current_speed = obs[3]
 
     dist = np.hypot(dx, dy)
-    KP = 0.09
-    KD = 0.25  # tune this
+    KP = 0.075
     if dist < 0.1:
         # print("Goal reached!")
         return ["Stop","Stop"]
     else:
         heading_cmd = np.arctan2(dx, dy)   # 0 rad = +y convention -> atan2(dx, dy)
         hold_heading = heading_cmd #Update previous angle 
-        speed_cmd = np.clip(KP * dist  - KD * current_speed, 0.00, env.vel_limit)  # Avoid zero speed (stuck) and clip to max speed
+        speed_cmd = np.clip(KP * dist, 0.01, env.vel_limit)  # Avoid zero speed (stuck) and clip to max speed
         return np.array([speed_cmd, heading_cmd])
