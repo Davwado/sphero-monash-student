@@ -110,22 +110,56 @@ class EKF:
         self.P = self.jacobian(self, self.state, action) @ self.P @ self.jacobian(self, self.state, action).T + self.Q  # Replace this with a proper Jacobian calculation
         return self.state_est, self.P
 
-    def update(self, measurement):
-        """
-        Correct the state estimate with a new measurement.
+    import numpy as np
 
-        The measurement (input) is in the same state format:
-            measurement = [x, y, heading, speed]
-        Returns:
-            self.state_est : the corrected state, same format as the state
-                             returned by dynamics(): [x, y, heading, speed]
-            self.P         : the corrected covariance, a 4x4 matrix whose rows
-                             and columns correspond to [x, y, heading, speed]
-        """
-        # Update the state estimate with a new measurement
-        
-        
-        self.state_est = self.state_est  # Replace this with a proper Kalman gain update
-        self.P = self.P  # Replace this with a proper covariance update
+def predict(self, action):
+    """
+    Predict the next state and covariance given a control action.
+    """
+    # 1. Predict the next state using the dynamics function
+    self.state_est = dynamics(self.state_est, action)
 
-        return self.state_est, self.P
+    # 2. Compute the Jacobian F of dynamics() at the current state/action
+    x, y, heading, speed = self.state_est
+    dt = self.dt  # adjust if your dt is stored/passed differently
+
+    F = np.array([
+        [1, 0, -speed * np.sin(heading) * dt, np.cos(heading) * dt],
+        [0, 1,  speed * np.cos(heading) * dt, np.sin(heading) * dt],
+        [0, 0, 1, 0],
+        [0, 0, 0, 1]
+    ])
+
+    # 3. Propagate the covariance using the Jacobian
+    self.P = F @ self.P @ F.T + self.Q
+
+    return self.state_est, self.P
+
+
+def update(self, measurement):
+    """
+    Correct the state estimate with a new measurement.
+    """
+    # Measurement model is identity: measurement directly observes the state
+    H = np.eye(4)
+
+    # 1. Innovation: difference between actual measurement and predicted state
+    innovation = measurement - H @ self.state_est
+
+    # Normalize heading innovation to [-pi, pi] to handle angle wraparound
+    innovation[2] = (innovation[2] + np.pi) % (2 * np.pi) - np.pi
+
+    # 2. Innovation covariance
+    S = H @ self.P @ H.T + self.R
+
+    # 3. Kalman gain
+    K = self.P @ H.T @ np.linalg.inv(S)
+
+    # 4. Correct the state estimate
+    self.state_est = self.state_est + K @ innovation
+    self.state_est[2] = (self.state_est[2] + np.pi) % (2 * np.pi) - np.pi  # keep heading normalized
+
+    # 5. Correct the covariance
+    self.P = (np.eye(4) - K @ H) @ self.P
+
+    return self.state_est, self.P
