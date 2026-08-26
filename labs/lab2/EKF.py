@@ -146,9 +146,6 @@ def update(self, measurement):
     # 1. Innovation: difference between actual measurement and predicted state
     innovation = measurement - H @ self.state_est
 
-    # Normalize heading innovation to [-pi, pi] to handle angle wraparound
-    innovation[2] = (innovation[2] + np.pi) % (2 * np.pi) - np.pi
-
     # 2. Innovation covariance
     S = H @ self.P @ H.T + self.R
 
@@ -157,7 +154,6 @@ def update(self, measurement):
 
     # 4. Correct the state estimate
     self.state_est = self.state_est + K @ innovation
-    self.state_est[2] = (self.state_est[2] + np.pi) % (2 * np.pi) - np.pi  # keep heading normalized
 
     # 5. Correct the covariance
     self.P = (np.eye(4) - K @ H) @ self.P
