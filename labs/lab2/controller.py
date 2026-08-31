@@ -33,7 +33,7 @@ def compute_action(env, obs, step):
 
     dist = np.hypot(dx, dy)
     KP = 0.09
-    KD = 0.25  # tune this
+    KD = 0.40  # tune this
     if dist < 0.05:
         # print("Goal reached!")
         return ["Stop","Stop"]
