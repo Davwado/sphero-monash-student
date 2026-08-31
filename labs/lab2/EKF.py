@@ -118,7 +118,7 @@ class EKF:
         H = np.array([[1, 0, 0, 0],[0, 1, 0, 0]])
 
         # 1. Innovation: difference between actual measurement and predicted state
-        innovation = measurement - H @ self.state_est
+        innovation = measurement[:2] - H @ self.state_est
 
         # 2. Innovation covariance
         S = H @ self.P @ H.T + self.R
