@@ -21,7 +21,7 @@ def dynamics(state, action):
         """
         x, y, heading, speed = state
         speed_cmd, heading_cmd = action
-        dt = 2.95  # real per-step time, calibrated against logs/lab1_real_latest.csv
+        dt = 0.1  # real per-step time, calibrated against logs/lab1_real_latest.csv
 
         # Compute new heading and speed ratelimited towards the commanded targets
         heading_error = wrap_angle(heading_cmd - heading)
