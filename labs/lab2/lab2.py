@@ -49,8 +49,13 @@ def control_loop(env, ekf, robot_env=None, action=None, moving=False):
     ekf.predict(action)
     if robot_env is not None:
         ekf.update(robot_obs)
+        meas = robot_obs
     else:
         ekf.update(sim_obs)
+        meas = sim_obs
+
+    print(f"trace(P)={np.trace(ekf.P):.5f}  "
+          f"innov={np.linalg.norm(np.asarray(meas)[:2] - ekf.state_est[:2]):.3f}")
 
     env.vis.set_belief(ekf.state_est, ekf.P)
     env.render()

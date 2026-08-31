@@ -5,9 +5,9 @@ def wrap_angle(angle):
     return (angle + np.pi) % (2.0 * np.pi) - np.pi  # Normalize to [-pi, pi)
 
 # Rate limits (rad/s, m/s^2) finangled against logs/lab1_real_latest.csv.
-MAX_TURN_RATE = 3.0     # rad/s, ~170 deg/s
-MAX_ACCEL = 0.30        # m/s^2, reaches 0.15 m/s in ~0.5 s
-MAX_DECEL = 0.50        # m/s^2, brakes faster than it accelerates
+MAX_TURN_RATE = 0.3     # rad/s, ~170 deg/s
+MAX_ACCEL = 0.003     # m/s^2, reaches 0.15 m/s in ~0.5 s
+MAX_DECEL = 0.01       # m/s^2, brakes faster than it accelerates
 
 
 def dynamics(state, action):
@@ -53,7 +53,7 @@ class EKF:
         self.dt = dt
         self.state_est = np.zeros(4)  # [x, y, heading, speed]
         self.P = np.eye(4) * 0.1  # Initial covariance
-        self.Q = np.diag([0.002, 0.002, 0.02, 0.005])  # Process noise covariance
+        self.Q = np.diag([0.001, 0.001, 0.001, 0.001])  # Process noise covariance
         self.R = np.diag([0.0025, 0.0025])  # Measurement noise covariance
 
     def jacobian(self, action):
