@@ -31,8 +31,60 @@ class EKF:
         self.dt = dt
         self.state_est = np.zeros(4)  # [x, y, heading, speed]
         self.P = np.eye(4) * 0.1  # Initial covariance
+<<<<<<< Updated upstream
         self.Q = np.diag([0.001, 0.001, 0.001, 0.001])  # Process noise covariance
         self.R = np.diag([0.005, 0.005])  # Measurement noise covariance
+=======
+
+        # Process noise: how much we distrust dynamics(). Slippery plastic
+        # surface, so heading and speed are the least reliable predictions.
+        self.Q = np.diag([0.002, 0.002, 0.01, 0.01])
+
+        # Measurement noise: variance of each observed state.
+        # x, y from obs_noise_std_pos=0.05 -> 0.05**2 = 0.0025
+        self.R = np.diag([0.005, 0.005, 0.04, 0.02])
+
+    def jacobian(self, action):
+        """
+        Compute the Jacobian of the dynamics function with respect to the state,
+        linearized around the current state estimate and the given action.
+        """
+        x, y, heading, speed = self.state_est
+        speed_cmd, heading_cmd = action
+        dt = self.dt
+
+        heading_error = wrap_angle(heading_cmd - heading)
+        turn_clipped = np.clip(heading_error, -MAX_TURN_RATE * dt, MAX_TURN_RATE * dt)
+        heading_new = wrap_angle(heading + turn_clipped)
+
+        # a = d(heading_new)/d(heading). 1 when the turn-rate clip is inactive
+        # (heading tracks the command), 0 when saturated.
+        a = 0.0 if abs(heading_error) > MAX_TURN_RATE * dt else 1.0
+
+        # b = d(speed_new)/d(speed). 1 when the accel/decel clip is inactive.
+        cos_he = float(np.cos(heading_error))
+        speed_target = speed_cmd * max(0.0, cos_he)
+        speed_error = speed_target - speed
+        max_step = MAX_ACCEL * dt if speed_error > 0 else MAX_DECEL * dt
+        b = 0.0 if abs(speed_error) > max_step else 1.0
+
+        # c = d(speed_new)/d(heading), via speed_target's dependence on
+        # heading_error. Only applies when speed isn't saturated and the
+        # cos term hasn't been clamped to zero.
+        if b == 1.0 and cos_he > 0:
+            c = speed_cmd * np.sin(heading_error)
+        else:
+            c = 0.0
+
+        J = np.array([
+            [1, 0,  speed * np.cos(heading_new) * dt * a,  np.sin(heading_new) * dt],
+            [0, 1, -speed * np.sin(heading_new) * dt * a,  np.cos(heading_new) * dt],
+            [0, 0,  a,                                     0],
+            [0, 0,  c,                                     b],
+        ])
+
+        return J
+>>>>>>> Stashed changes
 
     def predict(self, action):
         """
