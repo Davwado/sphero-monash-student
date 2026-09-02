@@ -58,7 +58,7 @@ class EKF:
 
         # Process noise: how much we distrust dynamics(). Slippery plastic
         # surface, so heading and speed are the least reliable predictions.
-        self.Q = np.diag([0.01, 0.01, 0.04, 0.01])
+        self.Q = np.diag([0.01, 0.01, 0.04, 0.02])
 
         # Measurement noise: variance of each observed state.
         # x, y from obs_noise_std_pos=0.05 -> 0.05**2 = 0.0025
