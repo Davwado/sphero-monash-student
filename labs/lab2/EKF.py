@@ -62,7 +62,7 @@ class EKF:
 
         # Measurement noise: variance of each observed state.
         # x, y from obs_noise_std_pos=0.05 -> 0.05**2 = 0.0025
-        self.R = np.diag([0.005, 0.005, 0.08, 0.02])
+        self.R = np.diag([0.005, 0.005, 0.04, 0.02])
 
     def jacobian(self, action):
         """
