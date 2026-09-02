@@ -5,8 +5,8 @@ def wrap_angle(angle):
     return (angle + np.pi) % (2.0 * np.pi) - np.pi  # Normalize to [-pi, pi)
 
 # Rate limits (rad/s, m/s^2) finangled against logs/lab1_real_latest.csv.
-MAX_TURN_RATE = 0.3     # how fast the ball can change heading
-MAX_ACCEL = 0.003       # accelerating toward the target speed
+MAX_TURN_RATE = 0.3  #  how fast the ball can change heading
+MAX_ACCEL = 0.003    # accelerating toward the target speed
 MAX_DECEL = 0.01        # braking toward the target speed
 
 
@@ -58,11 +58,11 @@ class EKF:
 
         # Process noise: how much we distrust dynamics(). Slippery plastic
         # surface, so heading and speed are the least reliable predictions.
-        self.Q = np.diag([0.002, 0.002, 0.02, 0.005])
+        self.Q = np.diag([0.002, 0.002, 0.04, 0.005])
 
         # Measurement noise: variance of each observed state.
         # x, y from obs_noise_std_pos=0.05 -> 0.05**2 = 0.0025
-        self.R = np.diag([0.0025, 0.0025, 0.02, 0.01])
+        self.R = np.diag([0.005, 0.005, 0.08, 0.02])
 
     def jacobian(self, action):
         """

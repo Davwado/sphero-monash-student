@@ -18,6 +18,9 @@ import numpy as np
 
 hold_heading = 0
 
+MAX_DECEL = 0.01   # must match EKF.py
+DT = 2.95    
+
 def compute_action(env, obs, step):
     """Return action = [speed_cmd, heading_cmd] for the current observation."""
     # Default: random action for testing. Replace with your control law.
@@ -33,8 +36,9 @@ def compute_action(env, obs, step):
 
     dist = np.hypot(dx, dy)
     KP = 0.09
-    KD = 0.40  # tune this
-    if dist < 0.05:
+    KD = 0.40 # tune this
+    brake_dist = (current_speed ** 2) / (2 * MAX_DECEL * DT)
+    if dist < 0.055 + brake_dist :
         # print("Goal reached!")
         return ["Stop","Stop"]
     else:
