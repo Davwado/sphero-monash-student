@@ -36,8 +36,8 @@ def compute_action(env, obs, step):
 
     dist = np.hypot(dx, dy)
     KP = 0.09
-    KD = 0.40 # tune this
-    brake_dist = 2*(current_speed ** 2) / (2 * MAX_DECEL * DT)
+    KD = 0.45 # tune this
+    brake_dist = 1.5*(current_speed ** 2) / (2 * MAX_DECEL * DT)
     if dist < 0.055 + brake_dist :
         # print("Goal reached!")
         return ["Stop","Stop"]
