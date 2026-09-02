@@ -54,9 +54,6 @@ def control_loop(env, ekf, robot_env=None, action=None, moving=False):
         ekf.update(sim_obs)
         meas = sim_obs
 
-    print(f"trace(P)={np.trace(ekf.P):.5f}  "
-          f"innov={np.linalg.norm(np.asarray(meas)[:2] - ekf.state_est[:2]):.3f}")
-
     env.vis.set_belief(ekf.state_est, ekf.P)
     env.render()
 
@@ -202,8 +199,19 @@ def main(sim_only=False):
                 # controller.py returns ["Stop", "Stop"] once it's within its
                 # goal tolerance - use that as the arrival signal.
                 if isinstance(result, list):
-                    print(f"Reached waypoint {wp_index}: {WAYPOINTS[wp_index]}  "
-                          f"(est: {ekf.state_est[0]:.3f}, {ekf.state_est[1]:.3f})")
+                    error_x = ekf.state_est[0] - WAYPOINTS[wp_index][0]
+                    error_y = ekf.state_est[1] - WAYPOINTS[wp_index][1]
+                    dist_to_goal = np.hypot(error_x, error_y)
+                    std_x = np.sqrt(ekf.P[0, 0])
+                    std_y = np.sqrt(ekf.P[1, 1])
+
+                    print(f"WP{wp_index}: dist={dist_to_goal:.4f}m  "
+                          f"err_x={error_x:+.4f} (1sd {std_x:.4f})  "
+                          f"err_y={error_y:+.4f} (1sd {std_y:.4f})")
+                    if robot_env is not None:
+                        robot_env.emergency_stop()
+                    time.sleep(0.8)
+
                     wp_index += 1
 
                     if wp_index < len(WAYPOINTS):
