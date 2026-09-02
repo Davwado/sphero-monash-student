@@ -546,14 +546,22 @@ class Visualiser:
         pad = max(6, fs // 3)
         gap = int(0.4 * rh)
         comp_r = int(1.6 * fs)
-        panel_w = int(12 * fs)
-        # Height: header+status, 4 value rows, pos+goal+collision, compass.
-        panel_h = (pad + 2 * rh + gap + 4 * rh + gap + 3 * rh + int(0.5 * rh)
-                   + fs + 2 * comp_r + pad)
-        panel = pygame.Surface((panel_w, panel_h), pygame.SRCALPHA)
-        panel.fill((0, 0, 0, 140))
         font = self._hud_font
         arrow_len = max(8, int(0.5 * fs))
+        # The status line is caller-supplied (key hints, goal entry, ...), so
+        # wrap it on "\n" and widen the panel to fit rather than clipping it.
+        status_lines = self.hud_status.split("\n") if self.hud_status else []
+        panel_w = int(12 * fs)
+        if status_lines:
+            panel_w = max(panel_w, max(font.size(s)[0] for s in status_lines)
+                                   + 2 * pad + arrow_len)
+        panel_w = min(panel_w, max(200, self.window_size[0] - 16))
+        n_status = max(1, len(status_lines))
+        # Height: header + status lines, 4 value rows, pos+goal+collision, compass.
+        panel_h = (pad + (1 + n_status) * rh + gap + 4 * rh + gap + 3 * rh
+                   + int(0.5 * rh) + fs + 2 * comp_r + pad)
+        panel = pygame.Surface((panel_w, panel_h), pygame.SRCALPHA)
+        panel.fill((0, 0, 0, 140))
 
         def row(y, label, color, arrow_heading=None):
             panel.blit(font.render(label, True, color), (pad, y))
@@ -563,9 +571,9 @@ class Visualiser:
 
         y = pad
         row(y, f"Run {self.hud_run}   Step {self.hud_step}", text_color); y += rh
-        if self.hud_status:
-            row(y, self.hud_status, text_color)
-        y += rh + gap
+        for line in (status_lines or [""]):
+            row(y, line, text_color); y += rh
+        y += gap
 
         if self.hud_action is not None:
             speed_cmd, heading_cmd = self.hud_action

@@ -1,9 +1,12 @@
 import time
 import argparse
+import importlib
 import numpy as np
 import pygame
 from contextlib import ExitStack, contextmanager
+
 from EKF import *
+import controller
 
 from sphero_unsw.sphero_edu import SpheroEduAPI
 from sphero_env.robot.connect import scan_and_connect
@@ -11,38 +14,50 @@ from sphero_env.robot.robot import Robot
 from sphero_env.envs import SpheroEnv
 
 
-### Control loop to handle the action and update the environments,
-# edit this to include the EKF prediction and update steps, and to visualize the belief state in the simulator.
-def control_loop(env, ekf, robot_env=None,action=None, moving=False):
+# Square path: (0,0) -> (0,0.5) -> (0.5,0.5) -> (0.5,0) -> (0,0)
+WAYPOINTS = [
+    (0.0, 0.0),
+    (0.0, 0.5),
+    (0.5, 0.5),
+    (0.5, 0.0),
+    (0.0, 0.0),
+]
+START_INDEX = 1   # skip (0,0), we start sitting on it
+
+
+def set_goal(env, robot_env, waypoint):
+    """Point the environments at the current waypoint so controller.py sees it."""
+    env.goal_pos = np.array(waypoint, dtype=float)
+    if robot_env is not None:
+        robot_env.goal_pos = np.array(waypoint, dtype=float)
+
+
+def control_loop(env, ekf, robot_env=None, action=None, moving=False):
     """
-    Control loop to handle the action and update the environments.
-    This function is called in the main loop to step both the simulator and the robot (if connected).
+    Step both environments, run the EKF predict/update cycle, and visualise
+    the belief state.
     """
-    # Step simulator directly and update its logging/visualization state.
     sim_obs, _, _, _, sim_info = env.step(action)
 
-    # Control robot directly (if connected)
     if robot_env is not None:
         robot_obs, _, _, _, robot_info = robot_env.step(action)
-        # print(f"Robot state: {info['state_odom']}, Collision: {info['collision']}, Acceleration: {info['acceleration']}, Orientation: {info['orientation']}, Gyro: {info['gyroscope']}, Velocity: {info['velocity']}")
 
     if robot_env is not None and not moving:
         robot_env.emergency_stop()
 
-     # Call the EKF to predict and update the state estimate based on the action and observation
-
-    ekf.predict(action)  # Predict the next state using the EKF
+    # EKF predict and update
+    ekf.predict(action)
     if robot_env is not None:
-        ekf.update(robot_obs)  # Update the EKF with the odometry measurement - you may want to also include other measurements if available from the info dictionary (e.g., IMU, gyro, etc.)
+        ekf.update(robot_obs)
+        meas = robot_obs
     else:
-        ekf.update(sim_obs)  # Update the EKF with the simulator observation
+        ekf.update(sim_obs)
+        meas = sim_obs
 
-    env.vis.set_belief(ekf.state_est, ekf.P)  # Update the simulator with the EKF state estimate to visualise the belief state
-
-
+    env.vis.set_belief(ekf.state_est, ekf.P)
     env.render()
 
-# This function creates a new simulator environment
+
 def make_sim_env():
     return SpheroEnv(
         dt=0.1,
@@ -62,6 +77,7 @@ def make_sim_env():
         window_size=(800, 800),
     )
 
+
 def make_real_env(api):
     return Robot(
         api=api,
@@ -76,10 +92,10 @@ def make_real_env(api):
         window_size=(800, 800),
     )
 
+
 @contextmanager
 def managed_sim_env():
     env = make_sim_env()
-    # Set up logging for the simulator environment
     env.set_log_path("logs/lab2_sim.csv")
     env.reset()
     env.start_logging()
@@ -89,13 +105,14 @@ def managed_sim_env():
         env.stop_logging()
         env.close()
 
+
 @contextmanager
 def managed_robot_env():
-    # Scan for and connect to a Sphero robot, then set up logging for the robot environment
     selected_toy, _ = scan_and_connect()
     print(f"Selected: {selected_toy.name}")
 
     with SpheroEduAPI(selected_toy) as api:
+        api.reset_aim()
         robot_env = make_real_env(api)
         robot_env.set_log_path("logs/lab2_robot.csv")
         robot_env.reset()
@@ -107,42 +124,47 @@ def managed_robot_env():
             robot_env.emergency_stop()
             robot_env.close()
 
+
 def parse_args():
-    parser = argparse.ArgumentParser(description="Teleoperate Sphero with optional simulator-only mode")
-    parser.add_argument("--sim", action="store_true", help="Run simulator-only mode (no robot connection)")
+    parser = argparse.ArgumentParser(
+        description="Lab 2: EKF state estimation with waypoint navigation")
+    parser.add_argument("--sim", action="store_true",
+                        help="Run simulator-only mode (no robot connection)")
     return parser.parse_args()
 
+
 def main(sim_only=False):
-    """Main function for teleoperation of Sphero robot with simulator."""
     with ExitStack() as stack:
         env = stack.enter_context(managed_sim_env())
         robot_env = stack.enter_context(managed_robot_env()) if not sim_only else None
 
         env.render()
 
-        ekf = EKF(dt=0.1)  # Initialize the EKF for state estimation
+        ekf = EKF(dt=0.1)
+
+        # Seed the EKF with the real starting pose if we have a robot
+        if robot_env is not None:
+            start = np.asarray(robot_env.get_odom_state(), dtype=float)
+            ekf.state_est = np.array([start[0], start[1], start[2], 0.0], dtype=float)
+
+        wp_index = START_INDEX
+        set_goal(env, robot_env, WAYPOINTS[wp_index])
 
         stack.callback(pygame.quit)
-        stack.callback(lambda: print("Stopped. Teleop closed."))
+        stack.callback(lambda: print("Stopped. Lab 2 closed."))
 
         mode_text = "Simulator only" if sim_only else "Robot + Simulator"
-        print(f"\nTele-op ready ({mode_text}):")
-        print("  W       = move forward")
-        print("  A/D     = turn left/right")
-        print("  S       = move backward")
-        print("  SPACE   = emergency stop")
-        print("  +/-     = speed")
-        print("  Q       = quit\n")
-
-        speed_norm = 0.25  # normalized speed [0, 1]
-        current_heading = 0.0 if robot_env is None else float(robot_env.get_odom_state()[2])
+        print(f"\nWaypoint navigation ready ({mode_text}):")
+        print("  R     = reload controller.py and restart the path")
+        print("  SPACE = emergency stop")
+        print("  Q     = quit\n")
+        print(f"Heading to waypoint {wp_index}: {WAYPOINTS[wp_index]}")
 
         running = True
         moving = False
-        last_speed_change_time = 0.0
+        step = 0
 
         while running:
-            # Handle pygame events
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
                     running = False
@@ -157,53 +179,61 @@ def main(sim_only=False):
                         moving = False
                         print("Emergency stop")
 
-                    elif event.key in (pygame.K_PLUS, pygame.K_EQUALS, pygame.K_KP_PLUS):
-                        now = time.time()
-                        if now - last_speed_change_time > 0.08:
-                            speed_norm = min(1.0, speed_norm + 0.1)
-                            print(f"Speed: {speed_norm:.1f}")
-                            last_speed_change_time = now
+                    elif event.key == pygame.K_r:
+                        # Hot-reload controller.py so gain edits take effect
+                        importlib.reload(controller)
+                        wp_index = START_INDEX
+                        set_goal(env, robot_env, WAYPOINTS[wp_index])
+                        step = 0
+                        print("Reloaded controller.py, restarting path")
+                        print(f"Heading to waypoint {wp_index}: {WAYPOINTS[wp_index]}")
 
-                    elif event.key in (pygame.K_MINUS, pygame.K_KP_MINUS):
-                        now = time.time()
-                        if now - last_speed_change_time > 0.08:
-                            speed_norm = max(0.0, speed_norm - 0.1)
-                            print(f"Speed: {speed_norm:.1f}")
-                            last_speed_change_time = now
-
-            # Handle continuous key presses
-            pressed = pygame.key.get_pressed()
-
-            v_cmd = 0.0
-            if pressed[pygame.K_w]:
-                v_cmd = speed_norm * 1.0  # forward
-                moving = True
-            elif pressed[pygame.K_s]:
-                v_cmd = -speed_norm * 1.0  # backward
-                moving = True
-            else:
+            if wp_index >= len(WAYPOINTS):
+                # Path complete - hold position
+                action = np.array([0.0, float(ekf.state_est[2])], dtype=np.float32)
                 moving = False
-
-            # Handle turning
-            turn_rate = 0.2  # radians per frame
-            if pressed[pygame.K_a]:
-                current_heading -= turn_rate  # turn left
-
-            if pressed[pygame.K_d]:
-                current_heading += turn_rate  # turn right
-
-            # Normalize heading to [-pi, pi]
-            current_heading = (current_heading + np.pi) % (2 * np.pi) - np.pi
-
-            # Create action [v, theta]
-            action = np.array([v_cmd, current_heading], dtype=np.float32)
-
-            control_loop(env, ekf=ekf, robot_env=robot_env, action=action, moving=moving)  # Call the control loop to handle the action and update the environments
-
-            if robot_env is not None:
-                time.sleep(0.01)  # Small delay to prevent busy-waiting
             else:
-                time.sleep(0.1)  # Small delay to prevent busy-waiting in sim-only mode
+                # Drive off the EKF belief, not a single noisy reading
+                result = controller.compute_action(env, ekf.state_est, step)
+
+                # controller.py returns ["Stop", "Stop"] once it's within its
+                # goal tolerance - use that as the arrival signal.
+                if isinstance(result, list):
+                    error_x = ekf.state_est[0] - WAYPOINTS[wp_index][0]
+                    error_y = ekf.state_est[1] - WAYPOINTS[wp_index][1]
+                    dist_to_goal = np.hypot(error_x, error_y)
+                    std_x = np.sqrt(ekf.P[0, 0])
+                    std_y = np.sqrt(ekf.P[1, 1])
+
+                    print(f"WP{wp_index}: dist={dist_to_goal:.4f}m  "
+                          f"err_x={error_x:+.4f} (1sd {std_x:.4f})  "
+                          f"err_y={error_y:+.4f} (1sd {std_y:.4f})")
+                    if robot_env is not None:
+                        robot_env.emergency_stop()
+                    time.sleep(0.8)
+
+                    wp_index += 1
+
+                    if wp_index < len(WAYPOINTS):
+                        set_goal(env, robot_env, WAYPOINTS[wp_index])
+                        print(f"Heading to waypoint {wp_index}: {WAYPOINTS[wp_index]}")
+                        result = controller.compute_action(env, ekf.state_est, step)
+                    else:
+                        print("Path complete.")
+                        result = None
+
+                if result is None or isinstance(result, list):
+                    action = np.array([0.0, float(ekf.state_est[2])], dtype=np.float32)
+                    moving = False
+                else:
+                    action = np.asarray(result, dtype=np.float32)
+                    moving = True
+
+            control_loop(env, ekf=ekf, robot_env=robot_env, action=action, moving=moving)
+            step += 1
+
+            time.sleep(0.01 if robot_env is not None else 0.1)
+
 
 if __name__ == "__main__":
     args = parse_args()

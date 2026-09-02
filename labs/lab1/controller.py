@@ -16,27 +16,29 @@ each run starts fresh and runs with the same controller code are repeatable.
 """
 import numpy as np
 
-GOAL = np.array([0.5,0.5])
-hold_heading = 0.0
+hold_heading = 0
 
-# _rng = np.random.default_rng(0)
-
-
-def compute_action(obs, step):
+def compute_action(env, obs, step):
     """Return action = [speed_cmd, heading_cmd] for the current observation."""
     # Default: random action for testing. Replace with your control law.
     # return _rng.uniform(low=-1.0, high=1.0, size=2)
+    global hold_heading
 
+    
+    
     # --- P-controller-to-goal skeleton (uncomment and tune) ---
-    dx = GOAL[0] - obs[0]
-    dy = GOAL[1] - obs[1]
-    heading_cmd = np.arctan2(dx, dy)   # 0 rad = +y convention -> atan2(dx, dy)
+    dx = env.goal_pos[0] - obs[0]
+    dy = env.goal_pos[1] - obs[1]
+    current_speed = obs[3]
+
     dist = np.hypot(dx, dy)
-    KP = 0.075
-    if dist < 0.05:
-        print("Goal reached!")
-        return np.array([0.0, hold_heading])  # Stop moving, keep heading
+    KP = 0.09
+    KD = 0.25  # tune this
+    if dist < 0.1:
+        # print("Goal reached!")
+        return ["Stop","Stop"]
     else:
+        heading_cmd = np.arctan2(dx, dy)   # 0 rad = +y convention -> atan2(dx, dy)
         hold_heading = heading_cmd #Update previous angle 
-        speed_cmd = np.clip(KP * dist, 0.0, 0.15)
+        speed_cmd = np.clip(KP * dist  - KD * current_speed, 0.00, env.vel_limit)  # Avoid zero speed (stuck) and clip to max speed
         return np.array([speed_cmd, heading_cmd])

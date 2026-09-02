@@ -1,0 +1,364 @@
+commit 791d20f7dde15fc004601113c3b4c23125a5ecec
+Author: Samuel Roberts <167833529+samsamthecodingman@users.noreply.github.com>
+Date:   Wed Aug 12 19:42:54 2026 +1000
+
+    increase polling rate attempt
+    
+    attempted to fix in lab with david and louisa
+
+commit 1fb376fe96914835dc69dde1e83ad5a71f253c69
+Author: Samuel Roberts <167833529+samsamthecodingman@users.noreply.github.com>
+Date:   Wed Aug 12 18:59:27 2026 +1000
+
+    Perfected control values
+
+commit 4ce4eb0b951701d1b14c48215435e94bc0a70c6f
+Author: lcam0026 <166363997+lcam0026@users.noreply.github.com>
+Date:   Wed Aug 12 18:58:50 2026 +1000
+
+    Revert "Merge branch 'Louisa' into Sam"
+    
+    This reverts commit 6546bb52e11a7c9d59e49f4d982fad9d23bbfa53, reversing
+    changes made to eb55bedf9121879c596279c76d02f9e532790013.
+
+commit 6546bb52e11a7c9d59e49f4d982fad9d23bbfa53
+Merge: eb55bed 3d74910
+Author: lcam0026 <166363997+lcam0026@users.noreply.github.com>
+Date:   Wed Aug 12 18:43:03 2026 +1000
+
+    Merge branch 'Louisa' into Sam
+
+commit 3d74910e1f5dc6548fb76209ef92de257619b8f5
+Author: lcam0026 <166363997+lcam0026@users.noreply.github.com>
+Date:   Wed Aug 12 18:33:44 2026 +1000
+
+    Changes to polling rate in dynamics.py
+
+commit eb55bedf9121879c596279c76d02f9e532790013
+Author: Samuel Roberts <167833529+samsamthecodingman@users.noreply.github.com>
+Date:   Wed Aug 12 18:18:44 2026 +1000
+
+    update KP Value
+
+commit 6566422cabe27ec9fa51477b4eb26b182b1741ec
+Author: Samuel Roberts <167833529+samsamthecodingman@users.noreply.github.com>
+Date:   Wed Aug 12 18:10:57 2026 +1000
+
+    fixed issues with successive runs
+    
+    runs after the initial run would have false directions. It now works perfectly with a speed cap of 0.1
+
+commit 16ccf8766b6974b54a749b3c3b2424d66b439ce6
+Author: Samuel Roberts <167833529+samsamthecodingman@users.noreply.github.com>
+Date:   Wed Aug 12 17:27:13 2026 +1000
+
+    Added reset to robot.py
+
+commit 1e0c86168a207062ea32cadf8e96782ef0860f61
+Author: Samuel Roberts <167833529+samsamthecodingman@users.noreply.github.com>
+Date:   Wed Aug 12 17:24:44 2026 +1000
+
+    Update lab1_sim_latest.csv
+
+commit 9640a3c3e81d53a3e2db89b9ffffc2ef267c3d2f
+Author: Samuel Roberts <167833529+samsamthecodingman@users.noreply.github.com>
+Date:   Wed Aug 12 16:49:24 2026 +1000
+
+    Revert "polling rate prints"
+    
+    This reverts commit 6a0cd15d5ff539ccd3324693b70a097d95b67306.
+
+commit 6a0cd15d5ff539ccd3324693b70a097d95b67306
+Author: samsamthecodingman <167833529+samsamthecodingman@users.noreply.github.com>
+Date:   Thu Aug 6 17:53:55 2026 +1000
+
+    polling rate prints
+
+commit 60a3986c2d00e6202e3606aaae4aeb4ea625f0c0
+Author: samsamthecodingman <167833529+samsamthecodingman@users.noreply.github.com>
+Date:   Thu Aug 6 13:36:36 2026 +1000
+
+    Compare runs now working
+
+commit ec1049407e92d7d84b2742be9c95a11764b81bb5
+Author: samsamthecodingman <167833529+samsamthecodingman@users.noreply.github.com>
+Date:   Thu Aug 6 13:13:57 2026 +1000
+
+    Create compare_runs.py
+
+commit 8ef9f91c04f70124afd98308bcddccee7a9857be
+Author: samsamthecodingman <167833529+samsamthecodingman@users.noreply.github.com>
+Date:   Thu Aug 6 13:11:46 2026 +1000
+
+    fixed infinite spinning
+
+commit c48396ddec90ece4532e9ddd609f367d932ffe30
+Author: samsamthecodingman <167833529+samsamthecodingman@users.noreply.github.com>
+Date:   Wed Aug 5 22:46:09 2026 +1000
+
+    Run recording feature and resizable text
+
+commit 035ab7b18c931acc122b8db8929512e9f6689ef5
+Author: samsamthecodingman <167833529+samsamthecodingman@users.noreply.github.com>
+Date:   Wed Aug 5 22:14:51 2026 +1000
+
+    Live-test interface Changes 1
+
+commit 5261c698d3e25f99948d7d9902375e4d66e3294d
+Merge: 49ef9cc 4d44e6f
+Author: samsamthecodingman <167833529+samsamthecodingman@users.noreply.github.com>
+Date:   Wed Aug 5 21:15:44 2026 +1000
+
+    Merge branch 'Sam'
+
+commit 4d44e6f5f8d38dca33a23581906cb9bcbf8a45e9
+Author: samsamthecodingman <167833529+samsamthecodingman@users.noreply.github.com>
+Date:   Wed Aug 5 21:15:24 2026 +1000
+
+    added easy to read diagram to html block diagram
+
+commit 49ef9ccb8436451a91d72e634ca500eb1acb3199
+Merge: 4fc1a48 9a7969a
+Author: samsamthecodingman <167833529+samsamthecodingman@users.noreply.github.com>
+Date:   Wed Aug 5 20:55:08 2026 +1000
+
+    Merge branch 'Sam'
+
+commit 9a7969a89b4900eeaf213e61ad3ae07f49856063
+Author: samsamthecodingman <167833529+samsamthecodingman@users.noreply.github.com>
+Date:   Wed Aug 5 20:54:29 2026 +1000
+
+    Added block diagrams in lab1
+
+commit 4fc1a488cb1034a7b02576ce24059f9de07b1391
+Merge: eacc71e 8de178f
+Author: samsamthecodingman <167833529+samsamthecodingman@users.noreply.github.com>
+Date:   Wed Aug 5 20:17:13 2026 +1000
+
+    Merge last working into main
+
+commit 8de178fa9c48d1bba78004d0bb088ac811056cf2
+Author: samsamthecodingman <167833529+samsamthecodingman@users.noreply.github.com>
+Date:   Wed Aug 5 20:14:38 2026 +1000
+
+    Update lab1_real.csv
+
+commit b733a6aea6d674b203d4ded843e2c463e2dc117c
+Author: samsamthecodingman <167833529+samsamthecodingman@users.noreply.github.com>
+Date:   Wed Aug 5 18:54:47 2026 +1000
+
+    Reset aim in robot.py
+
+commit eacc71eb41fa63dc6cf938d6b8df54baa3808aba
+Merge: f9a22d3 062d40d
+Author: samsamthecodingman <167833529+samsamthecodingman@users.noreply.github.com>
+Date:   Wed Aug 5 18:23:55 2026 +1000
+
+    Merge branch 'main' of https://github.com/Davwado/sphero-monash-student
+
+commit f9a22d38d370f50fb25f8563d664ddfbbf9f33db
+Author: samsamthecodingman <167833529+samsamthecodingman@users.noreply.github.com>
+Date:   Wed Aug 5 18:19:27 2026 +1000
+
+    Fixed robot speed (i think)
+
+commit 062d40d49adbb2fabbcdeecffae6d14a9946aa35
+Author: lcam0026 <166363997+lcam0026@users.noreply.github.com>
+Date:   Wed Aug 5 17:57:57 2026 +1000
+
+    update to heading_angle
+
+commit 636bd9dcd8a93072d3b2c505b377253995be7acf
+Author: samsamthecodingman <167833529+samsamthecodingman@users.noreply.github.com>
+Date:   Wed Aug 5 17:28:29 2026 +1000
+
+    Added Heading text to visualiser
+
+commit d56d8d69d41e304b789fa6b137581823bea0a89f
+Author: David Phillips <david.2004.p@gmail.com>
+Date:   Wed Aug 5 17:26:53 2026 +1000
+
+    Speed changes
+
+commit aa4c23f5c8d8c96084fb986f600657d1298f36b7
+Author: David Phillips <david.2004.p@gmail.com>
+Date:   Wed Aug 5 16:05:38 2026 +1000
+
+    Lab 1 work
+
+commit 28f7ba9aa79c864616ae4036649830861100f17c
+Author: Michael Burke <mgb45@users.noreply.github.com>
+Date:   Mon Aug 3 15:46:52 2026 +1000
+
+    Update README.md
+
+commit a9b00f4d8a519d2ec87c47226acfb25fb5344d03
+Merge: 7b6bccc 6716a3d
+Author: Michael Burke <mgb45@users.noreply.github.com>
+Date:   Mon Jul 27 14:32:37 2026 +1000
+
+    Merge pull request #5 from MonashRobotics/copilot/fix-lab-1-2-instructions-dynamics
+    
+    Update lab heading input references
+
+commit 6716a3dffc6798168a70282cba9086488a5b726e
+Author: copilot-swe-agent[bot] <198982749+Copilot@users.noreply.github.com>
+Date:   Mon Jul 27 04:14:42 2026 +0000
+
+    Update lab heading input references
+
+commit 7b6bcccc3a792d5f4b62020db8fdf61c41bb70b7
+Merge: f1d7282 3fc96a8
+Author: Michael Burke <mgb45@users.noreply.github.com>
+Date:   Mon Jul 27 13:01:18 2026 +1000
+
+    Merge pull request #3 from AndyLi-26/update_project_setup
+    
+    modify uv instructions
+
+commit 3fc96a890c748ead88daa2ae4d42e5016ce0a5a6
+Author: Andy Li <andyli26>
+Date:   Mon Jul 27 12:49:55 2026 +1000
+
+    modify readme
+
+commit f1d7282573bc8cf2d243024f148d93f5b5e22fbb
+Author: AaronMonash <110008453+AaronMonash@users.noreply.github.com>
+Date:   Mon Jul 27 11:06:46 2026 +1000
+
+    Update required python version
+
+commit 6dd2e002522b9353fb8e0b76d4b16e0f9ed2d4b2
+Author: Michael Burke <mgb45@users.noreply.github.com>
+Date:   Sun Jul 26 20:46:47 2026 +1000
+
+    Fix links to Lab instructions and final demo
+    
+    Updated links for Lab instructions and final demo in README.
+
+commit 3f59a3fdcd5aa606807a4d9fa61bf62e33df5db3
+Merge: b3b15a0 92338cc
+Author: Michael Burke <mgb45@users.noreply.github.com>
+Date:   Sun Jul 26 20:44:39 2026 +1000
+
+    Merge pull request #2 from AndyLi-26/update_project_setup
+    
+    restructure the files
+
+commit 92338cc1b6d3bd905d8d8c79c291cb22b8d6b033
+Author: Andy Li <andyli26>
+Date:   Sun Jul 26 19:33:29 2026 +1000
+
+    restructure the files
+
+commit b3b15a0d060417a95c9d001c8cce1f9e66ded12b
+Author: Michael Burke <mgb45@users.noreply.github.com>
+Date:   Tue Jul 7 13:14:13 2026 +1000
+
+    Update Lab3.md
+
+commit 0fd8e6e7ef77802382520f554819cda71a853444
+Author: Michael Burke <mgb45@users.noreply.github.com>
+Date:   Mon Jul 6 12:26:39 2026 +1000
+
+    Fix formatting in Lab2.md table headers
+
+commit 548cc057a2e912e603e665c398c9ac50a2815e10
+Merge: f742ea0 0ac2663
+Author: Michael Burke <mgb45@users.noreply.github.com>
+Date:   Thu Jul 2 10:15:40 2026 +1000
+
+    Merge pull request #1 from AndyLi-26/update_project_setup
+    
+    add fix-version, dependency issue
+
+commit 0ac2663b7bb1daa602537bef7c920eea821c5fb0
+Author: Andy Li <andyli26>
+Date:   Thu Jul 2 10:03:00 2026 +1000
+
+    add fix-version, dependency issue
+
+commit f742ea0128babe7f82a8adc65517084e5402f05a
+Author: Michael Burke <mgb45@users.noreply.github.com>
+Date:   Mon Jun 29 14:28:39 2026 +1000
+
+    Update README.md
+
+commit b21037a8526753ca8879bedb18767d19aa347e3d
+Author: Michael <michael@monash>
+Date:   Sun Jun 28 15:25:30 2026 +1000
+
+    Tweaked wording to be planner agnostic.
+
+commit 6d4d6b4eb314976574577bb60df2be192013dd79
+Author: Michael <michael@monash>
+Date:   Sun Jun 28 15:22:41 2026 +1000
+
+    Added skeletons for labs 1-4.
+
+commit ffd4d816f95bfd24e7ec4f2ce5967a6f9da05e73
+Author: Michael <michael@monash>
+Date:   Sun Jun 28 13:51:24 2026 +1000
+
+    Added lab2 skeleton.
+
+commit 267875fcc580b85086716cfb85fe9c0bebc28213
+Author: Michael <michael@monash>
+Date:   Sun Jun 28 00:22:24 2026 +1000
+
+    Added maze generator to repo.
+
+commit c7049022852f02e24db3d7c6dcf29e138dd2e01c
+Author: Michael <michael@monash>
+Date:   Sun Jun 28 00:15:49 2026 +1000
+
+    Removed duplicate obs description
+
+commit b76cb9b62e55365834f94ae0e7f480d3db28f937
+Author: Michael <michael@monash>
+Date:   Sun Jun 28 00:13:16 2026 +1000
+
+    Added more robot info detail
+
+commit 4d8d91be862e0c32a7315cf82e0a81b08a235259
+Merge: b2bae49 43fee8d
+Author: Michael <michael@monash>
+Date:   Sun Jun 28 00:05:43 2026 +1000
+
+    Merge remote-tracking branch 'refs/remotes/origin/main'
+
+commit b2bae49b06e4c8a80968c761f3eb76df10ea8d72
+Author: Michael <michael@monash>
+Date:   Sun Jun 28 00:04:35 2026 +1000
+
+    Updated lab 2. Added more sensor info to env step, fixed collision flag.
+
+commit 43fee8d627b19d330e5d90d6356442fb8e06606e
+Author: Michael Burke <mgb45@users.noreply.github.com>
+Date:   Wed Jun 24 11:12:55 2026 +1000
+
+    Update Lab1.md
+
+commit 12efcb92ef686acc89d8dabaebae6854d0447145
+Author: Michael <michael@monash>
+Date:   Mon Jun 8 13:21:38 2026 +1000
+
+    Tweaked instructions
+
+commit 59a98d45e13f6661abb5eb4845ac48b1f0b53768
+Author: Michael <michael@monash>
+Date:   Mon Jun 8 13:11:05 2026 +1000
+
+    Added teleop example, improved readme and updated lab1 scaffolding.
+
+commit 5d09742485262a74131660de352887fbceb108af
+Author: Michael <michael@monash>
+Date:   Mon Jun 8 12:48:12 2026 +1000
+
+    Added robot interface
+
+commit 862c5a503a5f1c1818478a9b61c555ba7ce1a70f
+Author: Michael <michael@monash>
+Date:   Mon Jun 8 12:45:17 2026 +1000
+
+    Added base repo to sphero-student

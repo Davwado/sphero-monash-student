@@ -36,6 +36,12 @@ class Robot(gym.Env):
         vel_limit: float = 0.5,
         settle_steps: int = 15,
 
+        # Sensor streaming period in ms. The toy pushes locator/velocity/gyro
+        # updates at this rate; get_location() and friends just read the latest
+        # cached values. None keeps whatever the connect sequence configured
+        # (sphero_unsw sets 150 ms). Lower = fresher data, more BLE traffic.
+        sensor_interval_ms: Optional[int] = None,
+
         # World dimensions (meters) - for compatibility
         world_width: float = 2.0,
         world_height: float = 2.0,
@@ -58,6 +64,10 @@ class Robot(gym.Env):
         super().__init__()
 
         self.api = api
+
+        self.sensor_interval_ms = sensor_interval_ms
+        if sensor_interval_ms is not None:
+            self.set_sensor_interval(sensor_interval_ms)
 
         # Logging + visualization settings
         self.last_command = None  # (heading_cmd_rad, speed_cmd_norm, timestamp)
@@ -167,6 +177,21 @@ class Robot(gym.Env):
             raise ValueError("setpoint_xy must contain at least 2 values [x, y].")
         self.current_setpoint = setpoint_arr[:2].copy()
         self._use_custom_setpoint = True
+
+    def set_goal(self, goal_xy):
+        """Set the target this env drives to.
+
+        Updates the goal used by controllers and the goal-reached test, moves
+        the marker in the visualiser, and re-points the logged setpoint at the
+        new goal unless a custom setpoint is currently in force.
+        """
+        goal_arr = np.asarray(goal_xy, dtype=np.float32).reshape(-1)
+        if goal_arr.shape[0] < 2:
+            raise ValueError("goal_xy must contain at least 2 values [x, y].")
+        self.goal_pos = goal_arr[:2].copy()
+        if not self._use_custom_setpoint:
+            self.current_setpoint = self.goal_pos.copy()
+        self.vis.set_goal(self.goal_pos)
 
     def update_estimate(
         self,
@@ -506,6 +531,26 @@ class Robot(gym.Env):
         self.vis.close()
 
     # ---- Robot-specific control methods ---- #
+
+    def set_sensor_interval(self, interval_ms: int):
+        """Set how often the toy streams sensor data, in milliseconds.
+
+        Must be called after the BLE connection is open, because the connect
+        sequence (set_robot_state_on_start) applies its own 150 ms default and
+        would otherwise overwrite this.
+
+        SpheroEduAPI keeps the toy handle private and exposes no accessor, so
+        the mangled attribute is the only route to sensor_control. Missing
+        attributes are tolerated so a change of library version degrades to the
+        previous behaviour instead of breaking the connection.
+        """
+        toy = getattr(self.api, "_SpheroEduAPI__toy", None)
+        if toy is None or not hasattr(toy, "sensor_control"):
+            print(f"Sensor interval not applied ({interval_ms} ms): "
+                  "no sensor_control on this toy.")
+            return False
+        toy.sensor_control.set_interval(int(interval_ms))
+        return True
 
     def set_heading_and_speed(self, heading_deg: float, speed: int):
         """

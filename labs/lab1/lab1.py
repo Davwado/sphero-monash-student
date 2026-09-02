@@ -21,7 +21,9 @@ import controller
 
 from contextlib import ExitStack, contextmanager
 
-IDLE_STATUS = "IDLE  R:run P:play S:save"
+IDLE_STATUS = "IDLE  R:run  G:goal\nP:play  S:save  Q:quit"
+GOAL_CHARS = "0123456789+-., "
+GOAL_HELP = "Set goal: type 'x y' or 'x,y' in the window, ENTER to apply, ESC to cancel."
 REPLAY_HELP = ("Replay: LEFT/RIGHT step (hold to scroll), wheel/drag bar to scrub, "
                "HOME/END jump, SPACE play/pause, S save, ESC back, Q quit")
 
@@ -92,6 +94,21 @@ def _safe_stop(env):
         traceback.print_exc()
 
 
+def _keepalive(env, sim: bool, last_keepalive: float) -> float:
+    """Ping the toy every ~3 s so the BLE link stays warm while nothing runs.
+
+    Returns the new last-ping timestamp. Must be called from every loop that
+    can sit idle for a long time (session idle, goal entry).
+    """
+    if sim or time.time() - last_keepalive <= 3.0:
+        return last_keepalive
+    try:
+        env.api.get_location()
+    except Exception:
+        traceback.print_exc()
+    return time.time()
+
+
 def _handle_common_keys(env, event):
     """Events that work everywhere: window resize/maximise, +/- HUD text size."""
     if event.type == pygame.VIDEORESIZE:
@@ -106,6 +123,20 @@ def _handle_common_keys(env, event):
         env.vis.set_hud_font_size(env.vis.hud_font_size - 2)
         return True
     return False
+
+
+def parse_goal(text):
+    """Parse "x y" / "x,y" / "x, y" into (x, y) floats, or None if malformed."""
+    parts = [p for p in text.replace(",", " ").split() if p]
+    if len(parts) != 2:
+        return None
+    try:
+        x, y = float(parts[0]), float(parts[1])
+    except ValueError:
+        return None
+    if not (math.isfinite(x) and math.isfinite(y)):
+        return None
+    return x, y
 
 
 def _latest_csv_path(sim: bool) -> str:
@@ -153,16 +184,6 @@ def run_one(env, sim: bool, run_idx: int, steps: int, seed: int):
     try:
         obs, _ = env.reset(seed=seed)
 
-        # controller.py is hot-reloaded above, so its GOAL can change between
-        # runs. reset() re-points the marker at the env's own goal_pos, so push
-        # the controller's goal in afterwards to keep the yellow dot, the logged
-        # setpoint and the goal-reached test all tracking the same target.
-        goal = getattr(controller, "GOAL", None)
-        if goal is not None:
-            env.goal_pos = np.asarray(goal, dtype=np.float32)
-            env.vis.set_goal(env.goal_pos)
-            env.set_current_setpoint(env.goal_pos)
-
         for step in range(steps):
             aborted = False
             for event in pygame.event.get():
@@ -180,11 +201,14 @@ def run_one(env, sim: bool, run_idx: int, steps: int, seed: int):
                 break
 
             try:
-                action = controller.compute_action(obs, step)
+                action = controller.compute_action(env, obs, step)
+
             except Exception:
                 traceback.print_exc()
                 print("controller.compute_action crashed - run aborted.")
                 break
+            if action[0] == "Stop":
+                continue    
 
             try:
                 obs, _, terminated, truncated, info = env.step(action)
@@ -216,6 +240,77 @@ def run_one(env, sim: bool, run_idx: int, steps: int, seed: int):
         env.vis.set_hud(status=IDLE_STATUS)
 
     return result, frames
+
+
+def prompt_for_goal(env, sim: bool) -> str:
+    """Modal HUD text entry for the next goal. Returns "idle" or "quit".
+
+    Runs its own event loop rather than a flag inside run_session for two
+    reasons: R/P/S must be inert while typing, and the characters a coordinate
+    needs ('-', '.', digits) would otherwise be eaten by the shared +/- font
+    shortcuts in _handle_common_keys. Rendering and the BLE keepalive keep
+    running here, so the link survives a slow typist.
+    """
+    buf = ""
+    err = ""
+    gx, gy = float(env.goal_pos[0]), float(env.goal_pos[1])
+    print(f"{GOAL_HELP}  Current goal: ({gx:+.2f}, {gy:+.2f})")
+    last_keepalive = time.time()
+    pygame.key.set_repeat(400, 40)      # hold BACKSPACE to delete
+    try:
+        while True:
+            caret = "_" if int(time.time() * 2) % 2 == 0 else " "
+            head = err if err else f"GOAL ({gx:+.1f},{gy:+.1f})"
+            env.vis.set_hud(status=f"{head}\nx y > {buf}{caret}")
+            env.render()
+
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
+                    return "quit"
+                if event.type == pygame.VIDEORESIZE:
+                    # Handled inline, NOT via _handle_common_keys, so that the
+                    # +/- font shortcuts stay disabled while typing.
+                    env.vis.handle_resize(event.w, event.h)
+                    continue
+                if event.type != pygame.KEYDOWN:
+                    continue
+                if event.key == pygame.K_ESCAPE:
+                    print("Goal unchanged.")
+                    return "idle"
+                if event.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
+                    if not buf.strip():
+                        print("Goal unchanged.")
+                        return "idle"
+                    goal = parse_goal(buf)
+                    if goal is None:
+                        err = "BAD - use: x y"
+                        print(f"Could not read a goal from {buf!r} "
+                              f"- expected 'x y' or 'x,y'.")
+                        continue
+                    if not (env.x_min <= goal[0] <= env.x_max
+                            and env.y_min <= goal[1] <= env.y_max):
+                        err = "OUT OF BOUNDS"
+                        print(f"Goal ({goal[0]:+.2f}, {goal[1]:+.2f}) is outside the "
+                              f"world (x {env.x_min:+.1f}..{env.x_max:+.1f}, "
+                              f"y {env.y_min:+.1f}..{env.y_max:+.1f}).")
+                        continue
+                    env.set_goal(goal)
+                    print(f"Goal set to ({goal[0]:+.2f}, {goal[1]:+.2f}). Press R to run.")
+                    return "idle"
+                if event.key == pygame.K_BACKSPACE:
+                    buf, err = buf[:-1], ""
+                    continue
+                ch = event.unicode
+                if ch and ch in GOAL_CHARS and len(buf) < 20:
+                    buf, err = buf + ch, ""
+
+            last_keepalive = _keepalive(env, sim, last_keepalive)
+            time.sleep(0.02)
+    except KeyboardInterrupt:
+        return "idle"
+    finally:
+        pygame.key.set_repeat()        # key repeat is off outside this prompt
+        env.vis.set_hud(status=IDLE_STATUS)
 
 
 def replay(env, sim: bool, frames, can_return: bool = True) -> str:
@@ -350,7 +445,7 @@ def run_session(env, sim: bool, steps: int, seed: int):
     run_idx = 1
     last_frames = []
     env.vis.set_hud(run=0, status=IDLE_STATUS)
-    print("Ready. In the pygame window: R = run, P = replay last run, "
+    print("Ready. In the pygame window: R = run, G = set goal, P = replay last run, "
           "S = save last run, SPACE = stop, +/- = text size, Q = quit.")
 
     last_keepalive = time.time()
@@ -373,6 +468,10 @@ def run_session(env, sim: bool, steps: int, seed: int):
                         last_keepalive = time.time()
                     if event.key == pygame.K_s:
                         save_last_run(sim)
+                    if event.key == pygame.K_g:
+                        if prompt_for_goal(env, sim) == "quit":
+                            return
+                        last_keepalive = time.time()
                     if event.key == pygame.K_r:
                         result, frames = run_one(env, sim, run_idx, steps, seed)
                         if result == "quit":
@@ -383,12 +482,7 @@ def run_session(env, sim: bool, steps: int, seed: int):
                         last_keepalive = time.time()
 
             # Keep the BLE link warm while idle so the toy doesn't sleep.
-            if not sim and time.time() - last_keepalive > 3.0:
-                last_keepalive = time.time()
-                try:
-                    env.api.get_location()
-                except Exception:
-                    traceback.print_exc()
+            last_keepalive = _keepalive(env, sim, last_keepalive)
 
             time.sleep(0.1)
         except KeyboardInterrupt:
@@ -407,7 +501,17 @@ def main(argv=None):
                         help="HUD text size (also +/- keys while running)")
     parser.add_argument("--replay", type=str, default=None, metavar="CSV",
                         help="Replay a saved run CSV (no robot connection)")
+    parser.add_argument("--goal", type=str, default=None, metavar="X,Y",
+                        help="Initial goal, e.g. --goal 1.2,-0.4 (G in the window changes it)")
     args = parser.parse_args(argv)
+
+    # Parsed before the env exists so a typo fails fast, i.e. before paying for
+    # a Bluetooth scan. The bounds check has to wait until the env is built.
+    initial_goal = None
+    if args.goal:
+        initial_goal = parse_goal(args.goal)
+        if initial_goal is None:
+            parser.error(f"--goal: expected 'x,y', got {args.goal!r}")
 
     if args.replay:
         # Pure playback: no Bluetooth, no controller - just the window.
@@ -422,6 +526,14 @@ def main(argv=None):
 
     with managed_env(args.sim) as control_env:
         control_env.vis.set_hud_font_size(args.font_size)
+        if initial_goal is not None:
+            # Warn rather than exit: the BLE link is already open by now, and
+            # throwing it away over a typo is worse than starting at the default.
+            if (control_env.x_min <= initial_goal[0] <= control_env.x_max
+                    and control_env.y_min <= initial_goal[1] <= control_env.y_max):
+                control_env.set_goal(initial_goal)
+            else:
+                print(f"--goal {initial_goal} is outside the world - keeping the default.")
         run_session(control_env, args.sim, args.steps, args.seed)
 
 if __name__ == "__main__":
