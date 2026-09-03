@@ -1,3 +1,199 @@
+commit 690cbdffb69cab9e2f926a1419088108c0f099fc
+Author: Samuel Roberts <167833529+samsamthecodingman@users.noreply.github.com>
+Date:   Wed Sep 2 18:15:03 2026 +1000
+
+    First run values fr this time
+
+commit a8700c8aabcb6985389b990f8d58f21080582a8e
+Author: Samuel Roberts <167833529+samsamthecodingman@users.noreply.github.com>
+Date:   Wed Sep 2 18:14:35 2026 +1000
+
+    First Run Values
+
+commit 6e129e77eac5261555288b656d89057a9c8d8099
+Author: Samuel Roberts <167833529+samsamthecodingman@users.noreply.github.com>
+Date:   Wed Sep 2 18:12:09 2026 +1000
+
+    Tuned Values
+
+commit c0d62ef4e9f1e8f1b52ca42dc4a93a57dbbdade2
+Merge: 6e333b0 e8e5f65
+Author: Samuel Roberts <167833529+samsamthecodingman@users.noreply.github.com>
+Date:   Wed Sep 2 18:03:07 2026 +1000
+
+    Merge branch 'sai'
+
+commit 6e333b06be371c4e41aa903763974e3f80ffe899
+Author: saisehgal <sseh0006@student.monash.edu>
+Date:   Wed Sep 2 18:00:30 2026 +1000
+
+    final v2
+
+commit e8e5f65baa20aaf38ea47db9d9c76aae0c6d2b48
+Author: saisehgal <sseh0006@student.monash.edu>
+Date:   Wed Sep 2 16:41:33 2026 +1000
+
+    final_on_day
+
+commit cbe001c725cbfa854812d4342ee59d3bb176b66b
+Author: saisehgal <sseh0006@student.monash.edu>
+Date:   Wed Sep 2 13:58:58 2026 +1000
+
+    final_working
+
+commit 7415dad4cf37fa992ef7d9d57da4d4442531eaaa
+Author: saisehgal <sseh0006@student.monash.edu>
+Date:   Wed Sep 2 13:21:25 2026 +1000
+
+    last working good
+    
+    very good with bumps
+    decent but still good on smooth surface
+    increased q, changed controller dynamics (decel)
+
+commit a9a5e6ec91ba24eb5921139eeadc68e4f02b76fa
+Author: saisehgal <sseh0006@student.monash.edu>
+Date:   Mon Aug 31 19:41:10 2026 +1000
+
+    last working with bump
+
+commit ac4a388a4caf7fe3ce1715e4af7043971f977292
+Author: saisehgal <sseh0006@student.monash.edu>
+Date:   Mon Aug 31 19:08:54 2026 +1000
+
+    fixed dynamics back to og
+
+commit acef747c66e812687a1c42129feb19a011ed700e
+Author: saisehgal <sseh0006@student.monash.edu>
+Date:   Mon Aug 31 18:38:47 2026 +1000
+
+    last working
+    
+    changed dynames dt to 0.1 to match ekf dt, control loop for lab2.py, custom q and r gains
+
+commit 140565bae4e15cb3cd7acac5fa37620db57d6e9a
+Author: lcam0026 <166363997+lcam0026@users.noreply.github.com>
+Date:   Mon Aug 31 17:00:47 2026 +1000
+
+    Changes to EKF.py
+
+commit e47b6db374c8937ecf3a508602e74b6eea9221ee
+Author: Samuel Roberts <167833529+samsamthecodingman@users.noreply.github.com>
+Date:   Wed Aug 26 18:48:34 2026 +1000
+
+    Working through errors
+
+commit cc69202a00e2f4bece55ba990a46a4e630a34f89
+Author: lcam0026 <166363997+lcam0026@users.noreply.github.com>
+Date:   Wed Aug 26 18:16:57 2026 +1000
+
+    Updates to predict() in EKF.py
+
+commit dfdbe31a55869cd9d2d74cdbe542d8e8538dbd10
+Author: Samuel Roberts <167833529+samsamthecodingman@users.noreply.github.com>
+Date:   Wed Aug 26 18:00:42 2026 +1000
+
+    Added calibration file
+
+commit 37f8437d2f54e1e44917be70bc14bf8d0cb545f2
+Author: saisehgal <sseh0006@student.monash.edu>
+Date:   Wed Aug 26 18:00:10 2026 +1000
+
+    EKF update v2
+
+commit a8e2785f54627489559e9d58f3aae9ee764e8a67
+Author: saisehgal <sseh0006@student.monash.edu>
+Date:   Wed Aug 26 17:57:29 2026 +1000
+
+    EKF update function
+
+commit 8ea9948d298ee007ab041db696ea43754dda34bc
+Author: lcam0026 <166363997+lcam0026@users.noreply.github.com>
+Date:   Wed Aug 26 17:56:06 2026 +1000
+
+    Predict + jacobian function added in EKF.py
+
+commit b19e24c5c0faf4c1844e4f645820d9f2db431776
+Author: Samuel Roberts <167833529+samsamthecodingman@users.noreply.github.com>
+Date:   Wed Aug 26 16:39:40 2026 +1000
+
+    Included dynamics.py
+
+commit b068a3498d7c5d92e7295f2f52827dbefb3783f1
+Author: Samuel Roberts <167833529+samsamthecodingman@users.noreply.github.com>
+Date:   Wed Aug 26 16:33:00 2026 +1000
+
+    Added dynamics.py
+
+commit 742655da3615bbd8357e3dbf837025e4c484b657
+Author: Samuel Roberts <167833529+samsamthecodingman@users.noreply.github.com>
+Date:   Wed Aug 26 16:31:56 2026 +1000
+
+    Revert "Lab 2 First commit"
+    
+    This reverts commit 769488e757fcfdbb78e9cb616fe6e2ec206bd599.
+
+commit 769488e757fcfdbb78e9cb616fe6e2ec206bd599
+Author: Samuel Roberts <167833529+samsamthecodingman@users.noreply.github.com>
+Date:   Wed Aug 26 16:21:18 2026 +1000
+
+    Lab 2 First commit
+
+commit 7e64b0d489780a38edc7844ee722448eb4b70218
+Author: Samuel Roberts <167833529+samsamthecodingman@users.noreply.github.com>
+Date:   Sat Aug 22 18:29:42 2026 +1000
+
+    Update dynamics.py
+
+commit bdbadb1dbab91bcea12000494865de26d49bbc16
+Author: saisehgal <sseh0006@student.monash.edu>
+Date:   Wed Aug 19 18:42:47 2026 +1000
+
+    added kd and adjusted kp
+
+commit 51003ee653ce66db4e784b86323f03a66de52b13
+Merge: ecf5f9f 06648e2
+Author: Samuel Roberts <167833529+samsamthecodingman@users.noreply.github.com>
+Date:   Wed Aug 19 18:17:04 2026 +1000
+
+    Merge branch 'Sam' of https://github.com/Davwado/sphero-monash-student into Sam
+
+commit ecf5f9f14b81bf5b2bf7e68bcd2c32a4416573f4
+Author: Samuel Roberts <167833529+samsamthecodingman@users.noreply.github.com>
+Date:   Wed Aug 19 18:15:54 2026 +1000
+
+    Added goal input to HUD
+
+commit 06648e252c95678ee6968271ba21576008f125fc
+Author: David Phillips <david.2004.p@gmail.com>
+Date:   Wed Aug 19 17:28:11 2026 +1000
+
+    Cut off location fixes
+
+commit 33a38c18e11547453cb890ec0dc6875572cc16af
+Author: David Phillips <david.2004.p@gmail.com>
+Date:   Wed Aug 19 16:28:40 2026 +1000
+
+    Coordinate fixes
+
+commit 300b8d2031e1045330952e9975d4d618132d098b
+Author: David Phillips <david.2004.p@gmail.com>
+Date:   Wed Aug 19 16:17:33 2026 +1000
+
+    Steps graphs matched
+
+commit 59a41616dbd2402b4749d7d6b14ed54d73848d64
+Author: David Phillips <david.2004.p@gmail.com>
+Date:   Wed Aug 19 16:06:47 2026 +1000
+
+    Step fixes + accelration sim
+
+commit f02bb56518f486692d006621c30a4dfd6eb197a7
+Author: Samuel Roberts <167833529+samsamthecodingman@users.noreply.github.com>
+Date:   Wed Aug 12 20:44:01 2026 +1000
+
+    Fixed stopping AND no crashing
+
 commit 791d20f7dde15fc004601113c3b4c23125a5ecec
 Author: Samuel Roberts <167833529+samsamthecodingman@users.noreply.github.com>
 Date:   Wed Aug 12 19:42:54 2026 +1000
@@ -5,6 +201,15 @@ Date:   Wed Aug 12 19:42:54 2026 +1000
     increase polling rate attempt
     
     attempted to fix in lab with david and louisa
+
+commit e6da237f5ea2601a231998dd63d2fd4cce74b42f
+Merge: 5261c69 1fb376f
+Author: lcam0026 <166363997+lcam0026@users.noreply.github.com>
+Date:   Wed Aug 12 19:15:45 2026 +1000
+
+    Merge pull request #1 from Davwado/Sam
+    
+    Sam
 
 commit 1fb376fe96914835dc69dde1e83ad5a71f253c69
 Author: Samuel Roberts <167833529+samsamthecodingman@users.noreply.github.com>
