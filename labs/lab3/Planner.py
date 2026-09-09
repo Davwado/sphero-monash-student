@@ -1,11 +1,6 @@
 import numpy as np
 import heapq
 
-<<<<<<< Updated upstream
-### Implement a planner and controller for the Sphero robot to navigate to a goal position in the environment.
-=======
-
->>>>>>> Stashed changes
 class Planner:
     def __init__(self, map, dt=0.1, resolution=0.125):
         """
@@ -67,10 +62,6 @@ class Planner:
         inflated = self.map.copy()
         wall_rows, wall_cols = np.where(self.map == 1)
 
-<<<<<<< Updated upstream
-        return waypoints  # Replace this with your planner's output
-
-=======
         for r, c in zip(wall_rows, wall_cols):
             is_border = (r == 0 or r == self.occ_h - 1 or
                          c == 0 or c == self.occ_w - 1)
@@ -213,4 +204,3 @@ class Planner:
         waypoints = self._thin(waypoints_world)
 
         return waypoints
->>>>>>> Stashed changes

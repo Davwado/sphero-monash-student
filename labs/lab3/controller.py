@@ -52,7 +52,7 @@ def compute_action(env, obs, step):
 
         # Calculate shortest angular error between current and desired heading
         # Normalizes the difference to be between -pi and pi
-        heading_error = (heading_cmd - current_heading + np.pi) % (2 * np.pi) - np.pi
+        heading_error = (heading_cmd - obs[2] + np.pi) % (2 * np.pi) - np.pi
         
         # 4. Calculate Raw Speed Command (Your PD logic)
         raw_speed_cmd = KP * dist - KD * current_speed
