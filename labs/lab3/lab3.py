@@ -1,4 +1,3 @@
-# Import necessary libraries
 from sphero_env.robot.connect import scan_and_connect
 from sphero_unsw.sphero_edu import SpheroEduAPI
 from sphero_env.robot.robot import Robot
@@ -16,38 +15,61 @@ LAB1_SEED = 0
 MAX_STEPS = 5000
 map = build_occupancy_grid()
 
-### Custom dynamics function for the Sphero robot - replace this with the one you developed in Lab 1
+
 def wrap_angle(angle):
-    return (angle + np.pi) % (2.0 * np.pi) - np.pi  # Normalize to [-pi, pi)
+    return (angle + np.pi) % (2.0 * np.pi) - np.pi
+
 
 def dynamics(state, action):
-        """
-        Compute the next state given current state and action using the base dynamics without noise.
-        This can be rewritten to improve the model.
-        """
-        x, y, heading, speed = state
-        speed_cmd, turn_rate_cmd = action
-        # Simple unicycle model dynamics
-        heading_new = wrap_angle(heading + turn_rate_cmd * 0.1)
-        speed_new = np.clip(speed + speed_cmd * 0.1, 0, 1.0)
-        x_new = x + speed_new * np.sin(heading_new) * 0.1
-        y_new = y + speed_new * np.cos(heading_new) * 0.1
-        return np.array([x_new, y_new, heading_new, speed_new], dtype=np.float32)
+    """
+    Unicycle model with a turn-RATE command (not absolute heading):
+        action: [speed_cmd, turn_rate_cmd]
+    """
+    x, y, heading, speed = state
+    speed_cmd, turn_rate_cmd = action
+    heading_new = wrap_angle(heading + turn_rate_cmd * 0.1)
+    speed_new = np.clip(speed + speed_cmd * 0.1, 0, 1.0)
+    x_new = x + speed_new * np.sin(heading_new) * 0.1
+    y_new = y + speed_new * np.cos(heading_new) * 0.1
+    return np.array([x_new, y_new, heading_new, speed_new], dtype=np.float32)
 
-### If needed, add the EKF from lab 2 here too, and integrate below.
 
 class Controller:
     def __init__(self, dt=0.1):
         self.dt = dt
+        self.MAX_TURN_RATE = 3.0
+        self.KP_HEADING = 1.5
+
+        self.CRUISE_SPEED = 0.15
+        self.SLOW_RADIUS = 0.12
+        self.KP_SPEED = 8.0
 
     def compute_action(self, state, waypoint):
         """
-        Fill in this function to implement a simple controller that computes the action based on the current state and the waypoint.
+        state    : [x, y, heading, speed, ...] (only first 4 used)
+        waypoint : [x, y]
+        Returns action = [speed_cmd, turn_rate_cmd] matching dynamics():
+            heading_new = heading + turn_rate_cmd * dt
+            speed_new   = clip(speed + speed_cmd * dt, 0, 1)
         """
+        x, y, heading, speed = state[:4]
+        dx = waypoint[0] - x
+        dy = waypoint[1] - y
+        dist = np.hypot(dx, dy)
 
-        action = np.array([0.0, 0.0])  # Replace this with your controller's output
+        desired_heading = np.arctan2(dx, dy)
+        heading_error = wrap_angle(desired_heading - heading)
 
-        return action  # Replace this with your controller's output
+        turn_rate_cmd = np.clip(self.KP_HEADING * heading_error,
+                                 -self.MAX_TURN_RATE, self.MAX_TURN_RATE)
+
+        align = max(0.0, np.cos(heading_error))
+        target_speed = self.CRUISE_SPEED * min(1.0, dist / self.SLOW_RADIUS) * align
+
+        speed_cmd = np.clip(self.KP_SPEED * (target_speed - speed), -2.0, 2.0)
+
+        return np.array([speed_cmd, turn_rate_cmd], dtype=np.float32)
+
 
 def make_sim_env():
     return SpheroEnv(
@@ -69,6 +91,7 @@ def make_sim_env():
         window_size=(800, 800),
     )
 
+
 def make_real_env(api):
     return Robot(
         api=api,
@@ -82,6 +105,7 @@ def make_real_env(api):
         render_mode="human",
         window_size=(800, 800),
     )
+
 
 @contextmanager
 def managed_env(sim: bool):
@@ -110,6 +134,7 @@ def managed_env(sim: bool):
                 real_env.close()
                 real_env.stop_logging()
 
+
 def control_loop(control_env):
 
     obs, _ = control_env.reset(seed=LAB1_SEED)
@@ -121,24 +146,89 @@ def control_loop(control_env):
     controller = Controller(dt=control_env.dt)
     planner = Planner(map=control_env.occupancy_grid, dt=control_env.dt)
 
-    waypoints = planner.plan(obs, control_env.goal_pos)
+    # Plan from the pose we just set above, not the stale obs returned by
+    # reset() before the overwrite.
+    start_state = np.array([-0.5, -0.5, 0.0, 0.0])
+
+    # margin_cells=0: this maze's corridors are only as wide as a single
+    # connector cell, so any wall inflation blocks the only free passage.
+    # Wall-clipping is instead handled at runtime via collision + replan.
+    waypoints = planner.plan(start_state, control_env.goal_pos, margin_cells=0)
+
+    print(f"Planned {len(waypoints)} waypoints")
+    for i, wp in enumerate(waypoints):
+        print(f"  wp{i}: {wp}")
 
     steps = 0
-    while steps < MAX_STEPS:
+    MAX_STEPS_PER_WAYPOINT = 200
+    MAX_REPLANS = 10
+    replans = 0
+    reached_goal = False
 
-        for waypoint in waypoints:
+    wp_index = 0
+    while wp_index < len(waypoints) and steps < MAX_STEPS:
+        waypoint = waypoints[wp_index]
+        wp_steps = 0
+        collided = False
+
+        while wp_steps < MAX_STEPS_PER_WAYPOINT and steps < MAX_STEPS:
             action = controller.compute_action(obs, waypoint)
             obs, _, terminated, truncated, info = control_env.step(action)
-
-            if (obs[0]-waypoint[0])**2 + (obs[1]-waypoint[1])**2 < control_env.goal_tolerance**2:
-                continue  # Move to the next waypoint if close enough
-
-            if (obs[0]-control_env.goal_pos[0])**2 + (obs[1]-control_env.goal_pos[1])**2 < control_env.goal_tolerance**2:
-                break  # Move to the next waypoint if close enough
-
             control_env.render()
 
-        steps += 1
+            wp_steps += 1
+            steps += 1
+
+            collided = info.get("collision", False) if isinstance(info, dict) else False
+            if not collided and len(obs) > 4:
+                collided = bool(obs[4])
+            if collided:
+                break
+
+            dist_to_goal_sq = (obs[0]-control_env.goal_pos[0])**2 + (obs[1]-control_env.goal_pos[1])**2
+            if dist_to_goal_sq < control_env.goal_tolerance**2:
+                reached_goal = True
+                break
+
+            dist_to_wp_sq = (obs[0]-waypoint[0])**2 + (obs[1]-waypoint[1])**2
+            if dist_to_wp_sq < control_env.goal_tolerance**2:
+                print(f"Reached waypoint {wp_index}: {waypoint}")
+                break
+
+        if reached_goal:
+            print("Goal reached.")
+            break
+
+        if collided and replans < MAX_REPLANS:
+            print(f"Collision near wp{wp_index}, step {wp_steps} - backing off and replanning")
+
+            # Back off for several steps, not just one, so the ball
+            # actually clears the wall before replanning
+            for _ in range(5):
+                obs, _, terminated, truncated, info = control_env.step(
+                    np.array([-0.1, 0.0], dtype=np.float32))
+                control_env.render()
+                steps += 1
+
+            try:
+                waypoints = planner.plan(obs, control_env.goal_pos, margin_cells=0)
+                wp_index = 0
+                replans += 1
+                print(f"Replanned {len(waypoints)} waypoints "
+                      f"(replan #{replans}) from ({obs[0]:.3f}, {obs[1]:.3f})")
+                continue
+            except (ValueError, RuntimeError) as e:
+                print(f"Replan failed: {e} - continuing with old plan")
+
+        if wp_steps >= MAX_STEPS_PER_WAYPOINT:
+            print(f"Timed out on waypoint {wp_index}: {waypoint} "
+                  f"(stuck at {obs[0]:.3f}, {obs[1]:.3f})")
+
+        wp_index += 1
+
+    if not reached_goal:
+        final_dist = np.hypot(obs[0]-control_env.goal_pos[0], obs[1]-control_env.goal_pos[1])
+        print(f"Path complete but goal not reached. Final distance: {final_dist:.3f} m")
 
     control_env.emergency_stop()
 
@@ -150,6 +240,7 @@ def main(argv=None):
 
     with managed_env(args.sim) as control_env:
         control_loop(control_env)
+
 
 if __name__ == "__main__":
     main()
