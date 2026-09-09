@@ -49,10 +49,17 @@ def dynamics(state, action):
 ### EKF class to track odometry and perform state estimation for the Sphero robot
 
 class EKF:
-    def __init__(self, dt=2.95):
+    def __init__(self, dt=2.95, dynamics_fn=None):
         # dt must match the timestep used inside dynamics(), otherwise the
         # state propagates on one timestep and the covariance on another.
         self.dt = dt
+
+        # Optional plant model override. The simulator runs a different model
+        # at a different dt to the real robot, and predicting with the
+        # real-robot dynamics above would propagate ~2.95s per sim step. When
+        # one is supplied the Jacobian is taken numerically, because the
+        # analytic jacobian() below is tied to this file's own constants.
+        self.dynamics_fn = dynamics_fn
         self.state_est = np.zeros(4)  # [x, y, heading, speed]
         self.P = np.eye(4) * 0.1  # Initial covariance
 
@@ -115,12 +122,28 @@ class EKF:
             self.P         : predicted covariance, 4x4
         """
         # Jacobian must be evaluated at the PRIOR state, before it is overwritten
-        J = self.jacobian(action)
+        if self.dynamics_fn is not None:
+            J = self._numerical_jacobian(action)
+            self.state_est = np.asarray(
+                self.dynamics_fn(self.state_est, action), dtype=float)
+        else:
+            J = self.jacobian(action)
+            self.state_est = np.asarray(dynamics(self.state_est, action), dtype=float)
 
-        self.state_est = dynamics(self.state_est, action)
         self.P = J @ self.P @ J.T + self.Q
 
         return self.state_est, self.P
+
+    def _numerical_jacobian(self, action, eps=1e-6):
+        """Finite-difference d(next state)/d(state) for an injected model."""
+        J = np.zeros((4, 4))
+        f0 = np.asarray(self.dynamics_fn(self.state_est, action), dtype=float)
+        for k in range(4):
+            perturbed = np.array(self.state_est, dtype=float)
+            perturbed[k] += eps
+            fk = np.asarray(self.dynamics_fn(perturbed, action), dtype=float)
+            J[:, k] = (fk - f0) / eps
+        return J
 
     def update(self, measurement):
         """

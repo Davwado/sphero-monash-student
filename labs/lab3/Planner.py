@@ -130,9 +130,15 @@ class Planner:
         open_set = [(0, start_cell)]
         came_from = {}
         g_score = {start_cell: 0}
+        closed = set()
 
         while open_set:
             _, current = heapq.heappop(open_set)
+
+            if current in closed:
+                # Stale duplicate left over from a since-improved g_score.
+                continue
+            closed.add(current)
 
             if current == goal_cell:
                 path = [current]
@@ -142,6 +148,8 @@ class Planner:
                 return path[::-1]
 
             for neighbor in self._neighbors(map_to_use, current):
+                if neighbor in closed:
+                    continue
                 tentative_g = g_score[current] + 1
                 if tentative_g < g_score.get(neighbor, float('inf')):
                     came_from[neighbor] = current
