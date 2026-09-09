@@ -7,7 +7,10 @@ import argparse
 import numpy as np
 
 from Planner import *
+from EKF import dynamics
+
 from sphero_env.envs.custom_maze_full import build_occupancy_grid
+
 
 from contextlib import ExitStack, contextmanager
 
@@ -20,55 +23,83 @@ def wrap_angle(angle):
     return (angle + np.pi) % (2.0 * np.pi) - np.pi
 
 
-def dynamics(state, action):
-    """
-    Unicycle model with a turn-RATE command (not absolute heading):
-        action: [speed_cmd, turn_rate_cmd]
-    """
-    x, y, heading, speed = state
-    speed_cmd, turn_rate_cmd = action
-    heading_new = wrap_angle(heading + turn_rate_cmd * 0.1)
-    speed_new = np.clip(speed + speed_cmd * 0.1, 0, 1.0)
-    x_new = x + speed_new * np.sin(heading_new) * 0.1
-    y_new = y + speed_new * np.cos(heading_new) * 0.1
-    return np.array([x_new, y_new, heading_new, speed_new], dtype=np.float32)
+# def dynamics(state, action):
+#     """
+#     Unicycle model with a turn-RATE command (not absolute heading):
+#         action: [speed_cmd, turn_rate_cmd]
+#     """
+#     x, y, heading, speed = state
+#     speed_cmd, turn_rate_cmd = action
+#     heading_new = wrap_angle(heading + turn_rate_cmd * 0.1)
+#     speed_new = np.clip(speed + speed_cmd * 0.1, 0, 1.0)
+#     x_new = x + speed_new * np.sin(heading_new) * 0.1
+#     y_new = y + speed_new * np.cos(heading_new) * 0.1
+#     return np.array([x_new, y_new, heading_new, speed_new], dtype=np.float32)
 
 
 class Controller:
     def __init__(self, dt=0.1):
         self.dt = dt
-        self.MAX_TURN_RATE = 3.0
-        self.KP_HEADING = 1.5
+        self.MAX_DECEL = 0.01   # must match EKF.py
+        selfDT = 2.95    
 
-        self.CRUISE_SPEED = 0.15
-        self.SLOW_RADIUS = 0.12
-        self.KP_SPEED = 8.0
+        # --- NEW TUNING PARAMETERS FOR LEGO SURFACE ---
+        self.MAX_ACCEL_STEP = 0.02  # Max change in speed per step (TUNE THIS: lower = less slip)
+        self.MAX_DECEL_STEP = 0.04  # Sphero can usually brake slightly harder than it accelerates
 
-    def compute_action(self, state, waypoint):
-        """
-        state    : [x, y, heading, speed, ...] (only first 4 used)
-        waypoint : [x, y]
-        Returns action = [speed_cmd, turn_rate_cmd] matching dynamics():
-            heading_new = heading + turn_rate_cmd * dt
-            speed_new   = clip(speed + speed_cmd * dt, 0, 1)
-        """
-        x, y, heading, speed = state[:4]
-        dx = waypoint[0] - x
-        dy = waypoint[1] - y
+    # def compute_action(self, state, waypoint):
+    def compute_action(self, env, obs, step):
+        """Return action = [speed_cmd, heading_cmd] for the current observation."""
+        # Default: random action for testing. Replace with your control law.
+        # return _rng.uniform(low=-1.0, high=1.0, size=2)
+        global hold_heading
+
+        
+        
+        # --- P-controller-to-goal skeleton (uncomment and tune) ---
+        dx = env.goal_pos[0] - obs[0]
+        dy = env.goal_pos[1] - obs[1]
+        current_speed = obs[3]
+
         dist = np.hypot(dx, dy)
+        KP = 0.09
+        KD = 0.45 # tune this
+        # brake_dist = 1.5*(current_speed ** 2) / (2 * MAX_DECEL * DT)
 
-        desired_heading = np.arctan2(dx, dy)
-        heading_error = wrap_angle(desired_heading - heading)
+        if dist < 0.055:
+            return ["Stop","Stop"]  # Goal Reached
 
-        turn_rate_cmd = np.clip(self.KP_HEADING * heading_error,
-                                 -self.MAX_TURN_RATE, self.MAX_TURN_RATE)
+        else:
+            heading_cmd = np.arctan2(dx, dy)   # 0 rad = +y convention -> atan2(dx, dy)
+            hold_heading = heading_cmd #Update previous angle 
 
-        align = max(0.0, np.cos(heading_error))
-        target_speed = self.CRUISE_SPEED * min(1.0, dist / self.SLOW_RADIUS) * align
+            # Calculate shortest angular error between current and desired heading
+            # Normalizes the difference to be between -pi and pi
+            heading_error = (heading_cmd - obs[2] + np.pi) % (2 * np.pi) - np.pi
+            
+            # 4. Calculate Raw Speed Command (Your PD logic)
+            raw_speed_cmd = KP * dist - KD * current_speed
+            
+            # 5. Heading-Coupled Speed Limiting
+            # Slow down if we need to turn. The larger the turn, the slower we go.
+            # np.pi/4 (45 degrees) is used as a scaling factor here.
+            turn_penalty = max(0.0, 1.0 - (abs(heading_error) / (np.pi / 4)))
+            raw_speed_cmd *= turn_penalty
+            target_speed = np.clip(raw_speed_cmd, 0.00, env.vel_limit)
+            
+            # 6. Slew Rate Limiting (Anti-Slip)
+            # Don't let the requested speed jump too fast from the previous speed
+            speed_cmd = np.clip(
+                target_speed, 
+                prev_speed_cmd - self.MAX_DECEL_STEP, 
+                prev_speed_cmd + self.MAX_ACCEL_STEP
+            )
+            
+            # Save for next time step
+            prev_speed_cmd = speed_cmd
 
-        speed_cmd = np.clip(self.KP_SPEED * (target_speed - speed), -2.0, 2.0)
+        return np.array([speed_cmd, heading_cmd])
 
-        return np.array([speed_cmd, turn_rate_cmd], dtype=np.float32)
 
 
 def make_sim_env():
