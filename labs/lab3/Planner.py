@@ -1,5 +1,9 @@
 import numpy as np
 
+from sphero_env.envs.custom_maze_full import build_occupancy_grid
+
+map = build_occupancy_grid()
+
 ### Implement a planner and controller for the Sphero robot to navigate to a goal position in the environment.
 class Planner:
     def __init__(self, map, dt=0.1):
@@ -31,4 +35,3 @@ class Planner:
         waypoints = [np.array([0.5, 0.5])]  # Replace this with your planner's output
 
         return waypoints  # Replace this with your planner's output
-
