@@ -60,8 +60,17 @@ def make_real_env(api):
         window_size=(800, 800),
     )
 
+def _fast_managed_api():
+    """Lazy import so the fast_comms path is only pulled in when --fast-comms
+    is actually passed - it lives alongside lab2, not lab1."""
+    import sys
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "lab2", "fast_comms"))
+    from fast_link import fast_managed_api
+    return fast_managed_api()
+
+
 @contextmanager
-def managed_env(sim: bool):
+def managed_env(sim: bool, fast_comms: bool = False):
     # The Bluetooth connection (real robot) is opened ONCE here and stays open
     # for the whole session; runs are started/stopped from the pygame window.
     if sim:
@@ -71,6 +80,17 @@ def managed_env(sim: bool):
         finally:
             sim_env.stop_logging()
             sim_env.close()
+    elif fast_comms:
+        # See labs/lab2/fast_comms/fast_link.py - drives through a low-latency
+        # BLE path instead of SpheroEduAPI, but presents the same interface
+        # Robot expects from `api`, so make_real_env() below is unchanged.
+        with _fast_managed_api() as api:
+            real_env = make_real_env(api)
+            try:
+                yield real_env
+            finally:
+                real_env.stop_logging()
+                real_env.close()
     else:
         with ExitStack() as stack:
             selected_toy, _ = scan_and_connect()
@@ -503,6 +523,9 @@ def main(argv=None):
                         help="Replay a saved run CSV (no robot connection)")
     parser.add_argument("--goal", type=str, default=None, metavar="X,Y",
                         help="Initial goal, e.g. --goal 1.2,-0.4 (G in the window changes it)")
+    parser.add_argument("--fast-comms", action="store_true",
+                        help="Real robot only: drive through labs/lab2/fast_comms' low-latency "
+                             "BLE path instead of SpheroEduAPI (see fast_link.py)")
     args = parser.parse_args(argv)
 
     # Parsed before the env exists so a typo fails fast, i.e. before paying for
@@ -524,7 +547,7 @@ def main(argv=None):
             view_env.close()
         return
 
-    with managed_env(args.sim) as control_env:
+    with managed_env(args.sim, fast_comms=args.fast_comms) as control_env:
         control_env.vis.set_hud_font_size(args.font_size)
         if initial_goal is not None:
             # Warn rather than exit: the BLE link is already open by now, and

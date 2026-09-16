@@ -106,8 +106,35 @@ def managed_sim_env():
         env.close()
 
 
+def _fast_managed_api():
+    """Lazy import so the fast_comms path is only pulled in when --fast-comms
+    is actually passed - it lives alongside lab2 already."""
+    import os
+    import sys
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), "fast_comms"))
+    from fast_link import fast_managed_api
+    return fast_managed_api()
+
+
 @contextmanager
-def managed_robot_env():
+def managed_robot_env(fast_comms: bool = False):
+    if fast_comms:
+        # See labs/lab2/fast_comms/fast_link.py - drives through a low-latency
+        # BLE path instead of SpheroEduAPI, but presents the same interface
+        # Robot expects from `api`, so make_real_env() below is unchanged.
+        with _fast_managed_api() as api:
+            robot_env = make_real_env(api)
+            robot_env.set_log_path("logs/lab2_robot.csv")
+            robot_env.reset()
+            robot_env.start_logging()
+            try:
+                yield robot_env
+            finally:
+                robot_env.stop_logging()
+                robot_env.emergency_stop()
+                robot_env.close()
+        return
+
     selected_toy, _ = scan_and_connect()
     print(f"Selected: {selected_toy.name}")
 
@@ -130,13 +157,16 @@ def parse_args():
         description="Lab 2: EKF state estimation with waypoint navigation")
     parser.add_argument("--sim", action="store_true",
                         help="Run simulator-only mode (no robot connection)")
+    parser.add_argument("--fast-comms", action="store_true",
+                        help="Real robot only: drive through labs/lab2/fast_comms' low-latency "
+                             "BLE path instead of SpheroEduAPI (see fast_link.py)")
     return parser.parse_args()
 
 
-def main(sim_only=False):
+def main(sim_only=False, fast_comms=False):
     with ExitStack() as stack:
         env = stack.enter_context(managed_sim_env())
-        robot_env = stack.enter_context(managed_robot_env()) if not sim_only else None
+        robot_env = stack.enter_context(managed_robot_env(fast_comms=fast_comms)) if not sim_only else None
 
         env.render()
 
@@ -237,4 +267,4 @@ def main(sim_only=False):
 
 if __name__ == "__main__":
     args = parse_args()
-    main(sim_only=args.sim)
+    main(sim_only=args.sim, fast_comms=args.fast_comms)

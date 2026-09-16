@@ -15,13 +15,18 @@ every real log we had before this, a genuine measured per-step dt.
 
 Does NOT touch sphero_env/Robot/lab1.py/lab2.py - entirely standalone.
 
+Runs until the controller reports the goal is reached (or --max-time /
+--steps runs out, or you Ctrl+C - either way the ball is stopped and
+whatever was recorded gets saved).
+
 Usage:
     python labs/lab2/fast_comms/benchmark_lab1_move.py
-    python labs/lab2/fast_comms/benchmark_lab1_move.py --steps 300 --out logs/fastcomms_run.csv
+    python labs/lab2/fast_comms/benchmark_lab1_move.py --max-time 120 --out logs/fastcomms_run.csv
     python labs/lab2/fast_comms/benchmark_lab1_move.py --max-hz 30   # throttle for a controlled comparison
 """
 import argparse
 import csv
+import itertools
 import os
 import sys
 import time
@@ -61,7 +66,7 @@ def _action_to_command(speed_cmd: float, heading_cmd: float):
     return heading_deg, speed_raw
 
 
-def run(steps: int, out_path: str, max_hz: float | None):
+def run(steps: int | None, max_time: float, out_path: str, max_hz: float | None):
     env = _GoalEnv(GOAL_POS, VEL_LIMIT)
 
     toy = fast_link.connect()
@@ -90,52 +95,65 @@ def run(steps: int, out_path: str, max_hz: float | None):
         min_period = (1.0 / max_hz) if max_hz else 0.0
         t0 = time.time()
         stopped = False
+        step_iter = range(steps) if steps is not None else itertools.count()
 
-        for step in range(steps):
-            loc = link.get_location()
-            x_m = (loc[0] / 100.0) if loc else 0.0
-            y_m = (loc[1] / 100.0) if loc else 0.0
+        try:
+            for step in step_iter:
+                t = time.time() - t0
+                if t >= max_time:
+                    print(f"Hit --max-time ({max_time:.0f}s) before reaching the goal.")
+                    break
 
-            obs = np.array([x_m, y_m, cur_heading_rad, cur_speed_mps, 0.0], dtype=np.float32)
-            action = lab1_controller.compute_action(env, obs, step)
+                loc = link.get_location()
+                x_m = (loc["x"] / 100.0) if loc else 0.0
+                y_m = (loc["y"] / 100.0) if loc else 0.0
 
-            t = time.time() - t0
+                obs = np.array([x_m, y_m, cur_heading_rad, cur_speed_mps, 0.0], dtype=np.float32)
+                action = lab1_controller.compute_action(env, obs, step)
 
-            if isinstance(action, list) and action[0] == "Stop":
-                stopped = True
-                link.fast_stop(np.degrees(cur_heading_rad))
+                if isinstance(action, list) and action[0] == "Stop":
+                    stopped = True
+                    link.fast_stop(np.degrees(cur_heading_rad))
+                    rows.append({
+                        "odom_x": x_m, "odom_y": y_m,
+                        "heading": cur_heading_rad, "speed": 0.0,
+                        "heading_cmd": cur_heading_rad, "speed_cmd": 0.0,
+                        "step": step + 1, "t": t,
+                    })
+                    print(f"Goal reached at step {step + 1} (t={t:.3f}s): "
+                          f"x={x_m:.3f} y={y_m:.3f}")
+                    break
+
+                speed_cmd, heading_cmd = float(action[0]), float(action[1])
+                heading_deg, speed_raw = _action_to_command(speed_cmd, heading_cmd)
+                link.fast_drive(heading_deg, speed_raw)
+
+                cur_heading_rad = heading_cmd
+                cur_speed_mps = speed_cmd
+
                 rows.append({
                     "odom_x": x_m, "odom_y": y_m,
-                    "heading": cur_heading_rad, "speed": 0.0,
-                    "heading_cmd": cur_heading_rad, "speed_cmd": 0.0,
+                    "heading": heading_cmd, "speed": speed_cmd,
+                    "heading_cmd": heading_cmd, "speed_cmd": speed_cmd,
                     "step": step + 1, "t": t,
                 })
-                print(f"Goal reached at step {step + 1} (t={t:.3f}s): "
-                      f"x={x_m:.3f} y={y_m:.3f}")
-                break
 
-            speed_cmd, heading_cmd = float(action[0]), float(action[1])
-            heading_deg, speed_raw = _action_to_command(speed_cmd, heading_cmd)
-            link.fast_drive(heading_deg, speed_raw)
+                if min_period:
+                    elapsed = time.time() - t0 - t
+                    if elapsed < min_period:
+                        time.sleep(min_period - elapsed)
+            else:
+                # step_iter exhausted (only possible when --steps was given)
+                print(f"Ran out of steps ({steps}) before reaching the goal.")
+        except KeyboardInterrupt:
+            print("\nInterrupted - stopping the ball and saving what was recorded.")
+        finally:
+            if not stopped:
+                link.fast_stop(np.degrees(cur_heading_rad))
 
-            cur_heading_rad = heading_cmd
-            cur_speed_mps = speed_cmd
-
-            rows.append({
-                "odom_x": x_m, "odom_y": y_m,
-                "heading": heading_cmd, "speed": speed_cmd,
-                "heading_cmd": heading_cmd, "speed_cmd": speed_cmd,
-                "step": step + 1, "t": t,
-            })
-
-            if min_period:
-                elapsed = time.time() - t0 - t
-                if elapsed < min_period:
-                    time.sleep(min_period - elapsed)
-
-        if not stopped:
-            link.fast_stop(np.degrees(cur_heading_rad))
-            print(f"Ran out of steps ({steps}) before reaching the goal.")
+        if not rows:
+            print("Nothing recorded (stopped before the first row) - no CSV written.")
+            return
 
         with open(out_path, "w", newline="") as f:
             writer = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
@@ -152,14 +170,18 @@ def run(steps: int, out_path: str, max_hz: float | None):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--steps", type=int, default=200,
-                        help="Max control steps before giving up (lab1 default budget is 100 at dt=0.1s)")
+    parser.add_argument("--steps", type=int, default=None,
+                        help="Optional cap on control steps (default: unbounded - runs until the "
+                             "goal, --max-time, or Ctrl+C)")
+    parser.add_argument("--max-time", type=float, default=60.0,
+                        help="Safety cutoff in seconds (default: 60s) - the real bound for an "
+                             "unthrottled loop, since step count doesn't map to a fixed duration")
     parser.add_argument("--out", type=str, default=DEFAULT_OUT,
                         help="CSV output path")
     parser.add_argument("--max-hz", type=float, default=None,
                         help="Optional throttle for a controlled-rate comparison (default: unthrottled)")
     args = parser.parse_args()
-    run(args.steps, args.out, args.max_hz)
+    run(args.steps, args.max_time, args.out, args.max_hz)
 
 
 if __name__ == "__main__":
