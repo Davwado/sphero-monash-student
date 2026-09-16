@@ -5,10 +5,16 @@ from sphero_env.robot.robot import Robot
 from sphero_env.envs import SpheroEnv
 
 import argparse
+import csv
 import numpy as np
 
+from types import SimpleNamespace
+
 from Planner import *
+from EKF import EKF
 from sphero_env.envs.custom_maze_full import build_occupancy_grid
+
+import controller
 
 from contextlib import ExitStack, contextmanager
 
@@ -16,9 +22,6 @@ LAB1_SEED = 0
 MAX_STEPS = 5000
 map = build_occupancy_grid()
 
-<<<<<<< Updated upstream
-### Custom dynamics function for the Sphero robot - replace this with the one you developed in Lab 1
-=======
 # Replace with your actual student ID before submitting.
 STUDENT_ID = "your_id_here"
 
@@ -39,43 +42,37 @@ VERBOSE = True
 DIVERGENCE_WARN = 0.25
 
 
->>>>>>> Stashed changes
 def wrap_angle(angle):
-    return (angle + np.pi) % (2.0 * np.pi) - np.pi  # Normalize to [-pi, pi)
+    return (angle + np.pi) % (2.0 * np.pi) - np.pi
+
 
 def dynamics(state, action):
-        """
-        Compute the next state given current state and action using the base dynamics without noise.
-        This can be rewritten to improve the model.
-        """
-        x, y, heading, speed = state
-        speed_cmd, turn_rate_cmd = action
-        # Simple unicycle model dynamics
-        heading_new = wrap_angle(heading + turn_rate_cmd * 0.1)
-        speed_new = np.clip(speed + speed_cmd * 0.1, 0, 1.0)
-        x_new = x + speed_new * np.sin(heading_new) * 0.1
-        y_new = y + speed_new * np.cos(heading_new) * 0.1
-        return np.array([x_new, y_new, heading_new, speed_new], dtype=np.float32)
+    """Rate-limited unicycle plant for the simulator.
 
-### If needed, add the EKF from lab 2 here too, and integrate below.
+    action: [speed_cmd, heading_cmd]
+    state:  [x, y, heading, speed]
+    """
+    x, y, heading, speed = state
+    speed_cmd, heading_cmd = action
 
-class Controller:
-    def __init__(self, dt=0.1):
-        self.dt = dt
+    heading_error = wrap_angle(heading_cmd - heading)
+    max_turn = SIM_MAX_TURN_RATE * SIM_DT
+    heading_new = wrap_angle(heading + np.clip(heading_error, -max_turn, max_turn))
 
-    def compute_action(self, state, waypoint):
-        """
-        Fill in this function to implement a simple controller that computes the action based on the current state and the waypoint.
-        """
+    speed_target = speed_cmd * max(0.0, float(np.cos(heading_error)))
+    speed_error = speed_target - speed
+    max_step = (SIM_MAX_ACCEL if speed_error > 0 else SIM_MAX_DECEL) * SIM_DT
+    speed_new = float(np.clip(speed + np.clip(speed_error, -max_step, max_step), 0.0, 1.0))
 
-        action = np.array([0.0, 0.0])  # Replace this with your controller's output
+    x_new = x + speed_new * np.sin(heading_new) * SIM_DT
+    y_new = y + speed_new * np.cos(heading_new) * SIM_DT
+    return np.array([x_new, y_new, heading_new, speed_new], dtype=np.float32)
 
-        return action  # Replace this with your controller's output
 
 def make_sim_env():
     return SpheroEnv(
-        dt=0.1,
-        max_steps=5000,
+        dt=SIM_DT,
+        max_steps=MAX_STEPS,
         vel_limit=0.15,
         world_width=1.25,
         world_height=1.25,
@@ -92,6 +89,7 @@ def make_sim_env():
         window_size=(800, 800),
     )
 
+
 def make_real_env(api):
     return Robot(
         api=api,
@@ -106,8 +104,26 @@ def make_real_env(api):
         window_size=(800, 800),
     )
 
+
+def _fast_managed_api():
+    """Lazy import so the fast_comms path is only pulled in when --fast-comms
+    is actually passed - it lives alongside lab2, not lab3.
+
+    Unlike lab1/lab2, control_loop() below actually reads info["collision"]
+    (and obs[4]) to trigger the escape/replan logic when the ball hits a
+    maze wall - so unlike fast_comms' locator-only default, this needs
+    accelerometer/velocity/gyroscope streamed too, or Robot._sense_collision()
+    silently always reports no collision and the escape logic never fires.
+    """
+    import os
+    import sys
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "lab2", "fast_comms"))
+    from fast_link import fast_managed_api
+    return fast_managed_api(sensors=("locator", "accelerometer", "velocity", "gyroscope"))
+
+
 @contextmanager
-def managed_env(sim: bool):
+def managed_env(sim: bool, fast_comms: bool = False):
     if sim:
         sim_env = make_sim_env()
         sim_env.set_log_path("logs/lab3_sim.csv")
@@ -117,12 +133,27 @@ def managed_env(sim: bool):
         finally:
             sim_env.stop_logging()
             sim_env.close()
+    elif fast_comms:
+        # See labs/lab2/fast_comms/fast_link.py - drives through a low-latency
+        # BLE path instead of SpheroEduAPI, but presents the same interface
+        # Robot expects from `api`, so make_real_env() below is unchanged.
+        with _fast_managed_api() as api:
+            real_env = make_real_env(api)
+            real_env.set_log_path("logs/lab3_real.csv")
+
+            real_env.start_logging()
+            try:
+                yield real_env
+            finally:
+                real_env.close()
+                real_env.stop_logging()
     else:
         with ExitStack() as stack:
             selected_toy, _ = scan_and_connect()
             print(f"Selected: {selected_toy.name}")
 
             api = stack.enter_context(SpheroEduAPI(selected_toy))
+            api.reset_aim()
             real_env = make_real_env(api)
             real_env.set_log_path("logs/lab3_real.csv")
 
@@ -133,30 +164,33 @@ def managed_env(sim: bool):
                 real_env.close()
                 real_env.stop_logging()
 
+
 def control_loop(control_env):
 
     obs, _ = control_env.reset(seed=LAB1_SEED)
 
-    control_env.state_true[0:3] = np.array([-0.5, -0.5, 0.0])
-    control_env.state_odom[0:3] = np.array([-0.5, -0.5, 0.0])
+    is_sim = isinstance(control_env, SpheroEnv)
+
+    if is_sim:
+        control_env.state_true[0:3] = np.array([-0.5, -0.5, 0.0])
+        control_env.state_odom[0:3] = np.array([-0.5, -0.5, 0.0])
+        frame_offset = np.zeros(2)
+    else:
+        frame_offset = START_XY - np.asarray(control_env.state_odom[:2], dtype=float)
+        print(f"Robot odom origin is map {tuple(np.round(-frame_offset, 3))}; "
+              f"shifting readings by {tuple(np.round(frame_offset, 3))}")
+
+    def to_map(o):
+        """Reading -> map frame. Heading is assumed already aligned (0 rad =
+        +y): place the ball on the start plate facing +y before reset_aim()."""
+        m = np.asarray(o, dtype=float)[:4].copy()
+        m[0:2] += frame_offset
+        return m
+
     rng = np.random.default_rng(LAB1_SEED)
 
-    controller = Controller(dt=control_env.dt)
-    planner = Planner(map=control_env.occupancy_grid, dt=control_env.dt)
+    planner = Planner(map=map, dt=control_env.dt)
 
-<<<<<<< Updated upstream
-    waypoints = planner.plan(obs, control_env.goal_pos)
-
-    steps = 0
-    while steps < MAX_STEPS:
-
-        for waypoint in waypoints:
-            action = controller.compute_action(obs, waypoint)
-            obs, _, terminated, truncated, info = control_env.step(action)
-
-            if (obs[0]-waypoint[0])**2 + (obs[1]-waypoint[1])**2 < control_env.goal_tolerance**2:
-                continue  # Move to the next waypoint if close enough
-=======
     start_state = np.array([-0.5, -0.5, 0.0, 0.0])
 
     if is_sim:
@@ -199,18 +233,25 @@ def control_loop(control_env):
     replans = 0
     reached_goal = False
     warned_divergence = False
->>>>>>> Stashed changes
 
-            if (obs[0]-control_env.goal_pos[0])**2 + (obs[1]-control_env.goal_pos[1])**2 < control_env.goal_tolerance**2:
-                break  # Move to the next waypoint if close enough
+    csv_file = open(f"{STUDENT_ID}_lab3.csv", "w", newline="")
+    csv_writer = csv.writer(csv_file)
+    csv_writer.writerow(["sim_x", "sim_y", "real_x", "real_y"])
 
-            control_env.render()
+    def log_row():
+        if is_sim:
+            sim_xy = control_env.state_true[0:2]
+        else:
+            sim_xy = ("", "")
+        csv_writer.writerow([sim_xy[0], sim_xy[1], est[0], est[1]])
 
-        steps += 1
+    try:
+        wp_index = 0
+        while wp_index < len(waypoints) and steps < MAX_STEPS:
+            waypoint = waypoints[wp_index]
+            wp_steps = 0
+            collided = False
 
-<<<<<<< Updated upstream
-    control_env.emergency_stop()
-=======
             wp_target = SimpleNamespace(goal_pos=waypoint, vel_limit=control_env.vel_limit)
 
             while wp_steps < MAX_STEPS_PER_WAYPOINT and steps < MAX_STEPS:
@@ -325,16 +366,19 @@ def control_loop(control_env):
     finally:
         csv_file.close()
         control_env.emergency_stop()
->>>>>>> Stashed changes
 
 
 def main(argv=None):
     parser = argparse.ArgumentParser()
     parser.add_argument("--sim", action="store_true", help="Run simulation")
+    parser.add_argument("--fast-comms", action="store_true",
+                        help="Real robot only: drive through labs/lab2/fast_comms' low-latency "
+                             "BLE path instead of SpheroEduAPI (see fast_link.py)")
     args = parser.parse_args(argv)
 
-    with managed_env(args.sim) as control_env:
+    with managed_env(args.sim, fast_comms=args.fast_comms) as control_env:
         control_loop(control_env)
+
 
 if __name__ == "__main__":
     main()
