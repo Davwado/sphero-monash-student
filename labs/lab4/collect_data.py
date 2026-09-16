@@ -41,16 +41,45 @@ from sphero_unsw.sphero_edu import SpheroEduAPI
 # ball on the floor.
 SPEED_CAP = 0.15
 
-# Steps held at each command. The ball must be given long enough to actually
-# reach steady state, otherwise every sample is a transient and the model
-# never sees the asymptote it is supposed to converge to.
+# --- measured on the whiteboard table, Phase 1, 2026-09-16 ------------------
+# From labs/lab4/logs/sphero_teleop_log.csv via timing_report.py. Re-measure
+# on a different surface or comms path; these are observations, not constants.
+#
+#   control period   0.300 s (3.3 Hz), p10/p90 0.196/0.316 - regular
+#   turn rate        0.70 rad/s median, 1.07 max (forward only, reversal
+#                    artefacts excluded - robot.py:420 flips commanded heading
+#                    by pi for negative speed, which reads as a fake 180 turn)
+#   locator refresh  1% stale at sensor_interval_ms=150 against a 300ms loop
+#
+# For reference, both existing models were wrong: lab1/dynamics.py assumes
+# 0.3 rad/s (2x too slow), the lab3 sim assumes 3.0 rad/s (4x too fast).
+MEASURED_STEP_S = 0.300
+MEASURED_TURN_RATE = 0.70
+
+# Steps held at each SPEED command. The ball must be given long enough to
+# actually reach steady state, otherwise every sample is a transient and the
+# model never sees the asymptote it is supposed to converge to. 8 steps at
+# 0.3s is ~2.4s, comfortably longer than the observed speed response.
 HOLD_STEPS = 8
+
+# Turns are held by ANGLE, not by a fixed step count. At 0.70 rad/s a step
+# turns ~12 deg, so a flat 8-step hold completes a 15 deg command with time
+# to spare but cuts a 180 deg command off at the halfway point - capturing
+# only transient and never the steady state it is supposed to settle into.
+TURN_SETTLE_FACTOR = 1.5   # overshoot allowance beyond the ideal-rate estimate
+MIN_TURN_HOLD = 4
 
 DEG = np.pi / 180.0
 
 
 def wrap_angle(a):
     return (a + np.pi) % (2.0 * np.pi) - np.pi
+
+
+def hold_for_turn(angle_rad):
+    """Steps to complete a turn of this size and then settle."""
+    ideal = abs(angle_rad) / (MEASURED_TURN_RATE * MEASURED_STEP_S)
+    return max(MIN_TURN_HOLD, int(np.ceil(ideal * TURN_SETTLE_FACTOR)))
 
 
 # ---------------------------------------------------------------- schedule --
@@ -78,9 +107,13 @@ def build_schedule(speed_cap=SPEED_CAP):
     # far slower than the sim's), so the fix is more repeats, not shorter holds.
     seg = []
     for _ in range(3):
+        prev = 0.0
         for d in (15, -15, 45, -45, 90, -90, 180, -180):
-            seg.append((0.0, d * DEG, HOLD_STEPS))
-            seg.append((0.0, 0.0, HOLD_STEPS // 2))  # settle back - also a step
+            seg.append((0.0, d * DEG, hold_for_turn((d * DEG) - prev)))
+            # Settling back is itself a turn of the same size, in the other
+            # direction - so it needs the same allowance, and doubles as data.
+            seg.append((0.0, 0.0, hold_for_turn(d * DEG)))
+            prev = 0.0
     sched.append(("heading_standstill", seg))
 
     # --- speed channel, straight line -----------------------------------
@@ -109,8 +142,8 @@ def build_schedule(speed_cap=SPEED_CAP):
     seg = []
     for _ in range(2):
         for d in (30, -30, 60, -60, 90, -90):
-            seg.append((v * 0.75, 0.0, HOLD_STEPS))      # get moving
-            seg.append((v * 0.75, d * DEG, HOLD_STEPS))  # turn while moving
+            seg.append((v * 0.75, 0.0, HOLD_STEPS))                  # get moving
+            seg.append((v * 0.75, d * DEG, hold_for_turn(d * DEG)))  # turn under way
     seg.append((0.0, 0.0, HOLD_STEPS))
     sched.append(("turn_under_way", seg))
 
@@ -120,7 +153,7 @@ def build_schedule(speed_cap=SPEED_CAP):
     seg = []
     for _ in range(3):
         seg.append((v * 0.6, 0.0, HOLD_STEPS * 2))
-        seg.append((v * 0.6, 180 * DEG, HOLD_STEPS * 2))
+        seg.append((v * 0.6, 180 * DEG, hold_for_turn(180 * DEG)))
     seg.append((0.0, 0.0, HOLD_STEPS))
     sched.append(("reversal", seg))
 
@@ -195,25 +228,54 @@ def managed_env(sim, log_path):
 # ------------------------------------------------------------------ guards --
 
 class WorkspaceGuard:
-    """Stops the run if the ball leaves a box centred on where it started.
+    """Stops the run if the ball leaves - or is about to leave - a box centred
+    on where it started.
 
     A whiteboard table has edges. Odometry is the only thing that knows where
     the ball is, and it drifts - so this is a soft guard, not a safety
     interlock. Keep a hand near the ball regardless.
+
+    Two things make a position-only check too late. The guard can only run
+    AFTER a step has been applied, and Phase 1 measured up to 0.22m of travel
+    in a single 0.3s step. A 0.10m margin is therefore inside one step's
+    stopping distance: by the time the check fires the ball is already over
+    the edge. Hence a wider default margin AND a one-step lookahead using the
+    current heading and speed.
     """
 
-    def __init__(self, origin_xy, width, height, margin=0.10):
+    # Wider than one step's worst-case travel measured in Phase 1 (0.22m).
+    DEFAULT_MARGIN = 0.25
+
+    def __init__(self, origin_xy, width, height, margin=DEFAULT_MARGIN,
+                 lookahead_s=MEASURED_STEP_S):
         self.origin = np.asarray(origin_xy, dtype=float)
         self.half_w = max(0.0, width / 2.0 - margin)
         self.half_h = max(0.0, height / 2.0 - margin)
+        self.lookahead_s = lookahead_s
+        if self.half_w <= 0 or self.half_h <= 0:
+            print(f"  !! table ({width:.2f} x {height:.2f} m) is not much bigger "
+                  f"than the {margin:.2f} m margin - the guard will fire "
+                  f"immediately. Use a larger surface or lower --speed-cap.")
 
-    def breached(self, xy):
+    def _outside(self, xy):
         d = np.asarray(xy, dtype=float) - self.origin
         return abs(d[0]) > self.half_w or abs(d[1]) > self.half_h
 
+    def breached(self, xy, heading=None, speed=None):
+        """True if the ball is outside the box, or projects outside it within
+        one step at its current heading and speed."""
+        if self._outside(xy):
+            return True
+        if heading is None or speed is None or not np.isfinite(speed):
+            return False
+        # Heading convention: 0 rad -> +y, pi/2 -> +x (see sphero_env).
+        step = np.array([np.sin(heading), np.cos(heading)]) * speed * self.lookahead_s
+        return self._outside(np.asarray(xy, dtype=float) + step)
+
     def describe(self):
         return (f"workspace +-{self.half_w:.2f} x +-{self.half_h:.2f} m "
-                f"about ({self.origin[0]:.2f}, {self.origin[1]:.2f})")
+                f"about ({self.origin[0]:.2f}, {self.origin[1]:.2f}), "
+                f"{self.lookahead_s:.2f}s lookahead")
 
 
 # -------------------------------------------------------------------- main --
@@ -231,8 +293,11 @@ def run_segment(env, name, commands, guard, base_heading, step_counter):
             obs, _, terminated, truncated, info = env.step(action)
             step_counter[0] += 1
 
-            xy = np.asarray(info.get("state_odom", obs))[:2]
-            if guard is not None and guard.breached(xy):
+            odom = np.asarray(info.get("state_odom", obs), dtype=float)
+            xy = odom[:2]
+            odom_h = odom[2] if odom.size > 2 else None
+            odom_v = odom[3] if odom.size > 3 else None
+            if guard is not None and guard.breached(xy, odom_h, odom_v):
                 print(f"  !! workspace breached at ({xy[0]:.2f}, {xy[1]:.2f}) "
                       f"- stopping segment '{name}'")
                 env.emergency_stop()
