@@ -1,4 +1,4 @@
-"""Benchmark: fast_link's direct-write drive path vs stock spherov2.
+"""Benchmark: fast_link's direct-write drive path vs stock sphero_unsw.
 
 Measures achieved commands/sec for both paths so you can see the actual
 speedup on your hardware before deciding whether to wire this into lab2.
@@ -7,7 +7,7 @@ Does NOT touch sphero_env/Robot/lab1.py/lab2.py - entirely standalone.
 
 Usage:
     python labs/lab2/fast_comms/benchmark.py
-    python labs/lab2/fast_comms/benchmark.py --duration 5 --toy-name SB-1234
+    python labs/lab2/fast_comms/benchmark.py --duration 5
 """
 import argparse
 import sys
@@ -19,8 +19,8 @@ import fast_link  # noqa: E402
 
 
 def benchmark_stock(toy, duration: float) -> float:
-    """Drive commands via the stock spherov2 path (ack-wait + cmd_safe_interval)."""
-    from spherov2.utils import ToyUtil
+    """Drive commands via the stock sphero_unsw path (ack-wait + cmd_safe_interval)."""
+    from sphero_unsw.utils import ToyUtil
 
     count = 0
     heading = 0
@@ -48,15 +48,11 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--duration", type=float, default=5.0,
                         help="Seconds to benchmark each path for")
-    parser.add_argument("--toy-name", type=str, default=None,
-                        help="Specific toy name to connect to (skips scan-all)")
     parser.add_argument("--skip-stock", action="store_true",
                         help="Skip the slow stock-path benchmark (just test fast_link)")
     args = parser.parse_args()
 
-    print("Scanning for BOLT...")
-    toy = fast_link.connect(toy_name=args.toy_name)
-    print(f"Found: {toy}")
+    toy = fast_link.connect()
 
     with toy:
         link = fast_link.FastSpheroLink(toy)
