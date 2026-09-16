@@ -1,4 +1,13 @@
-"""Lab 3 controller — PD with turn-in-place and corner-commit phases.
+"""Lab 3 controller — PD with an explicit turn-in-place phase.
+
+Speed note: SPEED_CAP was previously lowered to 0.06 to stop the ball
+crashing, but that made things worse, not better. At 0.06 m/s with dt=0.1
+the ball moves ~0.3cm per step while the position reading wobbles by ~5cm
+(obs_noise_std_pos=0.05), so the signal was ~15x smaller than the noise and
+the controller was effectively steering on noise alone - arctan2 of a
+5cm wobble over a 0.3cm real displacement produces wild heading commands.
+Driving at the full vel_limit gives ~1.5cm/step, a far better ratio against
+the same noise.
 
 Interfaces:
     obs    = [x (m), y (m), heading (rad), speed (m/s), collision_flag (0/1)]
@@ -14,31 +23,25 @@ DT = 2.95
 KP = 0.18
 KD = 0.45
 
+# Real motion must outrun the position noise or the controller steers on
+# nothing but noise. See module docstring.
 SPEED_CAP = 0.15
+
 GOAL_DIST_TOL = 0.015
 BRAKE_GAIN = 3.0
 
 MAX_ACCEL_STEP = 0.008
 MAX_DECEL_STEP = 0.04
 
+# Enter a turn-in-place phase above this heading error (~35 deg), and stay
+# in it until within TURN_EXIT (~10 deg). The gap is deliberate hysteresis:
+# a single threshold would let the ball flip in and out of turning on noise.
 TURN_THRESHOLD = np.radians(35)
 TURN_EXIT = np.radians(10)
-
-# Inside this radius, stop recomputing the bearing and drive straight on the
-# heading we already have. Two reasons:
-#  - the loop accepts arrival at WAYPOINT_TOLERANCE (5cm) short of the plate
-#    centre, so without this the ball starts turning for the next leg while
-#    still 5cm inside the current plate, and cuts the corner. The ball has
-#    real diameter, so a cut corner means clipping the wall.
-#  - arctan2(dx, dy) gets very sensitive as dist shrinks: at 3cm out, a 1cm
-#    wobble swings the commanded bearing 30+ degrees, which is what made the
-#    ball hunt in place when the tolerance itself was tightened instead.
-COMMIT_RADIUS = 0.08
 
 prev_speed_cmd = 0.0
 turning = False
 turn_target = 0.0
-committed_heading = None
 
 
 def wrap_angle(angle):
@@ -46,17 +49,16 @@ def wrap_angle(angle):
 
 
 def reset():
-    """Call after a replan so slew/turn/commit state doesn't carry over."""
-    global prev_speed_cmd, turning, turn_target, committed_heading
+    """Call after a replan so slew/turn state doesn't carry over."""
+    global prev_speed_cmd, turning, turn_target
     prev_speed_cmd = 0.0
     turning = False
     turn_target = 0.0
-    committed_heading = None
 
 
 def compute_action(env, obs, step):
     """Return action = [speed_cmd, heading_cmd] for the current observation."""
-    global prev_speed_cmd, turning, turn_target, committed_heading
+    global prev_speed_cmd, turning, turn_target
 
     dx = env.goal_pos[0] - obs[0]
     dy = env.goal_pos[1] - obs[1]
@@ -69,28 +71,8 @@ def compute_action(env, obs, step):
     if dist < GOAL_DIST_TOL + brake_dist:
         prev_speed_cmd = 0.0
         turning = False
-        committed_heading = None
         return np.array([0.0, heading])
 
-    # --- commit phase -----------------------------------------------------
-    # Close to the waypoint: lock the heading and drive straight through
-    # rather than re-aiming at a target that's nearly underneath us.
-    if dist < COMMIT_RADIUS:
-        if committed_heading is None:
-            committed_heading = np.arctan2(dx, dy)
-
-        speed_limit = min(SPEED_CAP, env.vel_limit)
-        target_speed = np.clip(KP * dist - KD * current_speed,
-                               0.00, speed_limit)
-        speed_cmd = np.clip(
-            target_speed,
-            prev_speed_cmd - MAX_DECEL_STEP,
-            prev_speed_cmd + MAX_ACCEL_STEP,
-        )
-        prev_speed_cmd = speed_cmd
-        return np.array([speed_cmd, committed_heading])
-
-    committed_heading = None
     desired_heading = np.arctan2(dx, dy)
 
     # --- turn phase -------------------------------------------------------

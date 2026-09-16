@@ -1,14 +1,19 @@
-# Import necessary libraries
 from sphero_env.robot.connect import scan_and_connect
 from sphero_unsw.sphero_edu import SpheroEduAPI
 from sphero_env.robot.robot import Robot
 from sphero_env.envs import SpheroEnv
 
 import argparse
+import csv
 import numpy as np
 
+from types import SimpleNamespace
+
 from Planner import *
+from EKF import EKF
 from sphero_env.envs.custom_maze_full import build_occupancy_grid
+
+import controller
 
 from contextlib import ExitStack, contextmanager
 
@@ -16,9 +21,6 @@ LAB1_SEED = 0
 MAX_STEPS = 5000
 map = build_occupancy_grid()
 
-<<<<<<< Updated upstream
-### Custom dynamics function for the Sphero robot - replace this with the one you developed in Lab 1
-=======
 # Replace with your actual student ID before submitting.
 STUDENT_ID = "your_id_here"
 
@@ -30,52 +32,41 @@ SIM_MAX_TURN_RATE = 3.0
 SIM_MAX_ACCEL = 0.3
 SIM_MAX_DECEL = 0.5
 
-# Set False to silence the per-step diagnostic print.
 VERBOSE = True
-
-# Warn when the filtered estimate and the raw reading disagree by more than
-# this. Not a rejection gate - just a flag, so a broken sensor shows up in
-# the log instead of being silently smoothed into a fake clean run.
 DIVERGENCE_WARN = 0.25
 
 
->>>>>>> Stashed changes
 def wrap_angle(angle):
-    return (angle + np.pi) % (2.0 * np.pi) - np.pi  # Normalize to [-pi, pi)
+    return (angle + np.pi) % (2.0 * np.pi) - np.pi
+
 
 def dynamics(state, action):
-        """
-        Compute the next state given current state and action using the base dynamics without noise.
-        This can be rewritten to improve the model.
-        """
-        x, y, heading, speed = state
-        speed_cmd, turn_rate_cmd = action
-        # Simple unicycle model dynamics
-        heading_new = wrap_angle(heading + turn_rate_cmd * 0.1)
-        speed_new = np.clip(speed + speed_cmd * 0.1, 0, 1.0)
-        x_new = x + speed_new * np.sin(heading_new) * 0.1
-        y_new = y + speed_new * np.cos(heading_new) * 0.1
-        return np.array([x_new, y_new, heading_new, speed_new], dtype=np.float32)
+    """Rate-limited unicycle plant for the simulator.
 
-### If needed, add the EKF from lab 2 here too, and integrate below.
+    action: [speed_cmd, heading_cmd]
+    state:  [x, y, heading, speed]
+    """
+    x, y, heading, speed = state
+    speed_cmd, heading_cmd = action
 
-class Controller:
-    def __init__(self, dt=0.1):
-        self.dt = dt
+    heading_error = wrap_angle(heading_cmd - heading)
+    max_turn = SIM_MAX_TURN_RATE * SIM_DT
+    heading_new = wrap_angle(heading + np.clip(heading_error, -max_turn, max_turn))
 
-    def compute_action(self, state, waypoint):
-        """
-        Fill in this function to implement a simple controller that computes the action based on the current state and the waypoint.
-        """
+    speed_target = speed_cmd * max(0.0, float(np.cos(heading_error)))
+    speed_error = speed_target - speed
+    max_step = (SIM_MAX_ACCEL if speed_error > 0 else SIM_MAX_DECEL) * SIM_DT
+    speed_new = float(np.clip(speed + np.clip(speed_error, -max_step, max_step), 0.0, 1.0))
 
-        action = np.array([0.0, 0.0])  # Replace this with your controller's output
+    x_new = x + speed_new * np.sin(heading_new) * SIM_DT
+    y_new = y + speed_new * np.cos(heading_new) * SIM_DT
+    return np.array([x_new, y_new, heading_new, speed_new], dtype=np.float32)
 
-        return action  # Replace this with your controller's output
 
 def make_sim_env():
     return SpheroEnv(
-        dt=0.1,
-        max_steps=5000,
+        dt=SIM_DT,
+        max_steps=MAX_STEPS,
         vel_limit=0.15,
         world_width=1.25,
         world_height=1.25,
@@ -92,6 +83,7 @@ def make_sim_env():
         window_size=(800, 800),
     )
 
+
 def make_real_env(api):
     return Robot(
         api=api,
@@ -105,6 +97,7 @@ def make_real_env(api):
         render_mode="human",
         window_size=(800, 800),
     )
+
 
 @contextmanager
 def managed_env(sim: bool):
@@ -123,6 +116,7 @@ def managed_env(sim: bool):
             print(f"Selected: {selected_toy.name}")
 
             api = stack.enter_context(SpheroEduAPI(selected_toy))
+            api.reset_aim()
             real_env = make_real_env(api)
             real_env.set_log_path("logs/lab3_real.csv")
 
@@ -133,30 +127,33 @@ def managed_env(sim: bool):
                 real_env.close()
                 real_env.stop_logging()
 
+
 def control_loop(control_env):
 
     obs, _ = control_env.reset(seed=LAB1_SEED)
 
-    control_env.state_true[0:3] = np.array([-0.5, -0.5, 0.0])
-    control_env.state_odom[0:3] = np.array([-0.5, -0.5, 0.0])
+    is_sim = isinstance(control_env, SpheroEnv)
+
+    if is_sim:
+        control_env.state_true[0:3] = np.array([-0.5, -0.5, 0.0])
+        control_env.state_odom[0:3] = np.array([-0.5, -0.5, 0.0])
+        frame_offset = np.zeros(2)
+    else:
+        frame_offset = START_XY - np.asarray(control_env.state_odom[:2], dtype=float)
+        print(f"Robot odom origin is map {tuple(np.round(-frame_offset, 3))}; "
+              f"shifting readings by {tuple(np.round(frame_offset, 3))}")
+
+    def to_map(o):
+        """Reading -> map frame. Heading is assumed already aligned (0 rad =
+        +y): place the ball on the start plate facing +y before reset_aim()."""
+        m = np.asarray(o, dtype=float)[:4].copy()
+        m[0:2] += frame_offset
+        return m
+
     rng = np.random.default_rng(LAB1_SEED)
 
-    controller = Controller(dt=control_env.dt)
-    planner = Planner(map=control_env.occupancy_grid, dt=control_env.dt)
+    planner = Planner(map=map, dt=control_env.dt)
 
-<<<<<<< Updated upstream
-    waypoints = planner.plan(obs, control_env.goal_pos)
-
-    steps = 0
-    while steps < MAX_STEPS:
-
-        for waypoint in waypoints:
-            action = controller.compute_action(obs, waypoint)
-            obs, _, terminated, truncated, info = control_env.step(action)
-
-            if (obs[0]-waypoint[0])**2 + (obs[1]-waypoint[1])**2 < control_env.goal_tolerance**2:
-                continue  # Move to the next waypoint if close enough
-=======
     start_state = np.array([-0.5, -0.5, 0.0, 0.0])
 
     if is_sim:
@@ -164,17 +161,18 @@ def control_loop(control_env):
         ekf.Q = np.diag([1e-4, 1e-4, 1e-4, 1e-4])
         ekf.R = np.diag([0.05**2, 0.05**2, 0.025**2, 0.025**2])
     else:
-        # Real robot: ~10:1 R/Q on position. Enough to smooth the step-to-step
-        # wobble, but still anchored to the measurement over time.
+        # Slippery surface. Slip breaks the MODEL, not the sensor: when the
+        # ball slides, dynamics() predicts a displacement that didn't happen,
+        # so the prediction is the untrustworthy part. Q therefore goes up
+        # (5x on position, 4x on speed vs the previous tuning) while R stays
+        # put, shifting the filter from ~10:1 toward ~2:1 - it now leans
+        # noticeably harder on the measurements.
         #
-        # A previous 500:1 ratio was a mistake: it made the filter effectively
-        # deaf, so when the odometry broke (position jumped 0.7m after the
-        # ball was picked up) the estimate simply integrated the motion model
-        # and drew the path that had been COMMANDED, reporting "Goal reached"
-        # for a run where the ball had gone the wrong way. A filter that
-        # can't be contradicted turns a sensor failure into a silent one.
+        # Speed gets the largest bump because slip shows up there first: the
+        # wheels turn at the commanded rate while the ball doesn't actually
+        # accelerate, so predicted speed runs ahead of real speed.
         ekf = EKF(dt=2.95)
-        ekf.Q = np.diag([0.002, 0.002, 0.005, 0.005])
+        ekf.Q = np.diag([0.01, 0.01, 0.015, 0.02])
         ekf.R = np.diag([0.02, 0.02, 0.05, 0.05])
 
     ekf.state_est = start_state.astype(float).copy()
@@ -188,29 +186,31 @@ def control_loop(control_env):
         print(f"  wp{i}: {wp}")
 
     steps = 0
-
-    # Loosened from 0.02: a tight radius makes the ball spin in place at each
-    # waypoint, because arctan2(dx, dy) gets very sensitive as dist shrinks.
-    # Still well inside the corridor half-width (grid_resolution/2 = 6.25cm).
     WAYPOINT_TOLERANCE = 0.05
-
     MAX_STEPS_PER_WAYPOINT = int(60.0 / control_env.dt)
     MAX_REPLANS = 10
     replans = 0
     reached_goal = False
     warned_divergence = False
->>>>>>> Stashed changes
 
-            if (obs[0]-control_env.goal_pos[0])**2 + (obs[1]-control_env.goal_pos[1])**2 < control_env.goal_tolerance**2:
-                break  # Move to the next waypoint if close enough
+    csv_file = open(f"{STUDENT_ID}_lab3.csv", "w", newline="")
+    csv_writer = csv.writer(csv_file)
+    csv_writer.writerow(["sim_x", "sim_y", "real_x", "real_y"])
 
-            control_env.render()
+    def log_row():
+        if is_sim:
+            sim_xy = control_env.state_true[0:2]
+        else:
+            sim_xy = ("", "")
+        csv_writer.writerow([sim_xy[0], sim_xy[1], est[0], est[1]])
 
-        steps += 1
+    try:
+        wp_index = 0
+        while wp_index < len(waypoints) and steps < MAX_STEPS:
+            waypoint = waypoints[wp_index]
+            wp_steps = 0
+            collided = False
 
-<<<<<<< Updated upstream
-    control_env.emergency_stop()
-=======
             wp_target = SimpleNamespace(goal_pos=waypoint, vel_limit=control_env.vel_limit)
 
             while wp_steps < MAX_STEPS_PER_WAYPOINT and steps < MAX_STEPS:
@@ -283,10 +283,6 @@ def control_loop(control_env):
 
                 moved = np.hypot(est[0]-pos_before[0], est[1]-pos_before[1])
 
-                # Zero movement means the ball is being HELD (picked up), not
-                # wedged against a wall. Skipping the waypoint here throws
-                # away a leg of the path and makes the next leg cut a
-                # diagonal across the maze. Wait and retry the SAME waypoint.
                 if moved < 0.005:
                     print(f"  ball didn't move ({moved:.3f}m) - held or stalled, "
                           f"waiting rather than skipping")
@@ -325,7 +321,6 @@ def control_loop(control_env):
     finally:
         csv_file.close()
         control_env.emergency_stop()
->>>>>>> Stashed changes
 
 
 def main(argv=None):
@@ -335,6 +330,7 @@ def main(argv=None):
 
     with managed_env(args.sim) as control_env:
         control_loop(control_env)
+
 
 if __name__ == "__main__":
     main()
