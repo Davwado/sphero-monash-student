@@ -1,6 +1,7 @@
 import os
 import csv
 import math
+import time
 import numpy as np
 import pygame
 
@@ -32,8 +33,16 @@ class Visualiser:
             "setpoint_x", "setpoint_y",
             # Appended columns (keep at the end for backwards compatibility);
             # these make a saved CSV a complete replay file for lab1 --replay.
-            "gt_heading", "gt_speed", "collision", "step"
+            "gt_heading", "gt_speed", "collision", "step",
+            # Wall-clock seconds since start_logging(). Without this, a log
+            # records WHAT the ball did but not over how long, so slip (the
+            # ball moved less than commanded) and latency (less time passed
+            # than assumed) are indistinguishable - and dt is exactly what a
+            # fitted dynamics model needs. perf_counter is monotonic, so this
+            # stays sane if the system clock steps mid-run.
+            "t_wall"
         ]
+        self._t0 = None
         self._gt_traj = []
         self._odom_traj = []
         self._est_traj = []
@@ -67,6 +76,7 @@ class Visualiser:
         self._writer = csv.writer(self._file)
         self._writer.writerow(self._columns)
         self._file.flush()
+        self._t0 = time.perf_counter()
 
     def stop_logging(self):
         if self._file is not None:
@@ -210,6 +220,10 @@ class Visualiser:
         row["gt_speed"] = float(gt_state[3]) if gt_state is not None and len(gt_state) > 3 else np.nan
         row["collision"] = float(collision) if collision is not None else np.nan
         row["step"] = int(step_count) if step_count is not None else np.nan
+        # Timestamped at record() time, i.e. after the step has been applied,
+        # so consecutive diffs measure the real control period including
+        # comms latency.
+        row["t_wall"] = (time.perf_counter() - self._t0) if self._t0 is not None else np.nan
         # Write
         if self._writer is not None:
             self._writer.writerow([row.get(col, np.nan) for col in self._columns])
