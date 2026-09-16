@@ -71,6 +71,11 @@ class EKF:
         # x, y from obs_noise_std_pos=0.05 -> 0.05**2 = 0.0025
         self.R = np.diag([0.005, 0.005, 0.04, 0.02])
 
+        # Track whether the most recent update() call was accepted or
+        # rejected as an outlier, so callers can log/react to it.
+        self.last_update_rejected = False
+        self.last_innovation_norm = 0.0
+
     def jacobian(self, action):
         """
         Compute the Jacobian of the dynamics function with respect to the state,
@@ -145,29 +150,47 @@ class EKF:
             J[:, k] = (fk - f0) / eps
         return J
 
-    def update(self, measurement):
+    def update(self, measurement, max_innovation=0.25):
         """
         Correct the state estimate with a new measurement.
         measurement: [x, y, heading, speed, ...] - extra entries are ignored.
+
+        max_innovation: outlier gate, in metres. If the measured position
+        disagrees with the predicted position by more than this, the
+        measurement is rejected outright and the prediction is kept as-is.
+
+        This exists because wheel slip during wall contact (driving into,
+        or backing off from, a collision) can make the hardware's odometry
+        report a position that jumped by tens of centimetres in a single
+        step - physically impossible given the plant's speed limit, and
+        without this gate the filter faithfully incorporates that bad
+        reading, dragging the estimate outside the maze entirely.
+        Set max_innovation=None to disable gating (e.g. for sim, where the
+        measurement model is exactly known and never produces slip-like
+        outliers).
         """
-        # Measurement model is identity: we observe all four states directly
+        self.last_update_rejected = False
+
         H = np.eye(4)
 
-        # 1. Innovation: difference between actual measurement and prediction
         innovation = np.asarray(measurement, dtype=float)[:4] - H @ self.state_est
         innovation[2] = wrap_angle(innovation[2])  # heading is circular
 
-        # 2. Innovation covariance
-        S = H @ self.P @ H.T + self.R
+        pos_innovation_norm = float(np.hypot(innovation[0], innovation[1]))
+        self.last_innovation_norm = pos_innovation_norm
 
-        # 3. Kalman gain
+        if max_innovation is not None and pos_innovation_norm > max_innovation:
+            self.last_update_rejected = True
+            # Reject: keep the predicted state/covariance from predict(),
+            # don't let an implausible reading corrupt the estimate.
+            return self.state_est, self.P
+
+        S = H @ self.P @ H.T + self.R
         K = self.P @ H.T @ np.linalg.inv(S)
 
-        # 4. Correct the state estimate
         self.state_est = self.state_est + K @ innovation
         self.state_est[2] = wrap_angle(self.state_est[2])
 
-        # 5. Correct the covariance
         self.P = (np.eye(4) - K @ H) @ self.P
 
         return self.state_est, self.P

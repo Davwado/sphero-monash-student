@@ -130,15 +130,9 @@ class Planner:
         open_set = [(0, start_cell)]
         came_from = {}
         g_score = {start_cell: 0}
-        closed = set()
 
         while open_set:
             _, current = heapq.heappop(open_set)
-
-            if current in closed:
-                # Stale duplicate left over from a since-improved g_score.
-                continue
-            closed.add(current)
 
             if current == goal_cell:
                 path = [current]
@@ -148,8 +142,6 @@ class Planner:
                 return path[::-1]
 
             for neighbor in self._neighbors(map_to_use, current):
-                if neighbor in closed:
-                    continue
                 tentative_g = g_score[current] + 1
                 if tentative_g < g_score.get(neighbor, float('inf')):
                     came_from[neighbor] = current
@@ -159,29 +151,23 @@ class Planner:
 
         return None
 
-    def _thin(self, waypoints):
-        """Keep only points where direction changes."""
-        if len(waypoints) <= 2:
-            return waypoints
-        thinned = [waypoints[0]]
-        for i in range(1, len(waypoints) - 1):
-            prev_dir = waypoints[i] - waypoints[i - 1]
-            next_dir = waypoints[i + 1] - waypoints[i]
-            n1, n2 = np.linalg.norm(prev_dir), np.linalg.norm(next_dir)
-            if n1 < 1e-9 or n2 < 1e-9:
-                continue
-            if not np.allclose(prev_dir / n1, next_dir / n2, atol=1e-6):
-                thinned.append(waypoints[i])
-        thinned.append(waypoints[-1])
-        return thinned
-
     # ------------------------------------------------------------- public --
 
     def plan(self, state, goal, margin_cells=0):
         """
         state : [x, y, heading, speed]
         goal  : [x, y]
-        Returns: list of np.array([x, y]) waypoints, start to goal.
+        Returns: list of np.array([x, y]) waypoints, start to goal - one per
+        plate centre along the route.
+
+        Deliberately NOT thinned to turn-points only. Thinning collapsed a
+        run of three plate centres into a single 0.5m leg, and over that
+        distance lateral drift from odometry noise and surface slip was
+        enough to touch a corridor wall - the controller only ever aims at
+        the leg endpoint, so it never corrects back toward the corridor
+        centreline. Keeping every plate centre re-aims the ball every
+        0.25m, which pulls it back to the middle of the corridor and
+        re-anchors the heading at each arrival.
         """
         search_map = self.inflate_walls(margin_cells=margin_cells)
 
@@ -208,7 +194,6 @@ class Planner:
                                 f"(margin_cells={margin_cells})")
 
         logical_cells = [c for c in path_cells if c[0] % 2 == 1 and c[1] % 2 == 1]
-        waypoints_world = [self.occ_to_world(c) for c in logical_cells]
-        waypoints = self._thin(waypoints_world)
+        waypoints = [self.occ_to_world(c) for c in logical_cells]
 
         return waypoints

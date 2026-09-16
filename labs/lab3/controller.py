@@ -1,8 +1,9 @@
-"""Lab 1 controller — edit this file, save, then press R in the pygame window.
+"""Lab 3 controller — brake-distance PD controller with slew-rate limiting.
 
-lab1.py hot-reloads this module before every run, so you can tune your
-controller without restarting the program (and without reconnecting to the
-Sphero over Bluetooth).
+Tuned for slow, methodical waypoint-to-waypoint motion: the ball should
+approach each waypoint, settle, pivot, then move off gently. Top speed is
+capped well below the env's vel_limit because momentum is what causes both
+the overshoot and the wall contact - a slower ball has time to correct.
 
 Interfaces:
     obs    = [x (m), y (m), heading (rad), speed (m/s), collision_flag (0/1)]
@@ -10,67 +11,86 @@ Interfaces:
 
 Heading convention: 0 rad points along +y ("up" in the window), +pi/2 points
 along +x. heading_cmd is a desired absolute heading, not a turn rate.
-
-Note: module-level state (like _rng below) is re-created on every reload, so
-each run starts fresh and runs with the same controller code are repeatable.
 """
 import numpy as np
 
-# --- TUNING PARAMETERS FOR LEGO SURFACE ---
-# The plant tracks speed_cmd as a speed TARGET, so KD divides the gain rather
-# than damping it: the loop settles at v = KP*dist/(1+KD). At the old KP=0.09
-# that capped out at 0.062*dist ~ 0.05 m/s, a third of vel_limit, which is why
-# a full run took ~1300 steps. KP=0.87 puts v at vel_limit one plate (0.25m)
-# out. Tuned in sim - re-check on the real robot before trusting it there.
-KP = 0.2
-KD = 0.45  # tune this
-# Arrival radius. Must stay well inside the corridor half-width
-# (grid_resolution/2 = 0.0625m), or the ball turns for the next waypoint while
-# still far enough off-centre to clip the corner. Also has to sit below
-# lab3.py's WAYPOINT_TOLERANCE, or the loop stalls just outside the radius.
-GOAL_DIST_TOL = 0.02
-MAX_ACCEL_STEP = 0.02  # Max change in speed per step (TUNE THIS: lower = less slip)
-MAX_DECEL_STEP = 0.04  # Sphero can usually brake slightly harder than it accelerates
+hold_heading = 0
 
-# Persisted across steps for slew-rate limiting; re-created on every hot reload.
+MAX_DECEL = 0.01
+DT = 2.95
+
+KP = 0.18
+KD = 0.45
+
+# Hard cap on commanded speed, below the env's vel_limit of 0.15. This is the
+# main knob for "slower": KP only controls the command until it clips, so
+# capping here bounds top speed on the long legs regardless of distance.
+SPEED_CAP = 0.06
+
+# Arrival radius. Kept below lab3.py's WAYPOINT_TOLERANCE (0.02) so the
+# controller doesn't park just outside the acceptance radius and stall.
+GOAL_DIST_TOL = 0.015
+
+# Brake-distance multiplier. Higher = starts slowing earlier. Raised from 1.5
+# because the ball was consistently overshooting - it couldn't shed momentum
+# in the distance it was allowing itself.
+BRAKE_GAIN = 3.0
+
+# Slew-rate limits on the speed COMMAND, per step. Without these, arriving at
+# a waypoint and switching to the next makes dist jump ~13x in one step with
+# nothing damping it, producing a lurch at exactly the moment the ball is
+# also being told to turn for the next leg. ACCEL lowered to 0.008 so the
+# ramp takes ~8 steps rather than 3.
+MAX_ACCEL_STEP = 0.008
+MAX_DECEL_STEP = 0.04
+
 prev_speed_cmd = 0.0
+
+
+def reset():
+    """Call after a replan so heading/slew history doesn't carry over."""
+    global hold_heading, prev_speed_cmd
+    hold_heading = 0
+    prev_speed_cmd = 0.0
 
 
 def compute_action(env, obs, step):
     """Return action = [speed_cmd, heading_cmd] for the current observation."""
-    global prev_speed_cmd
+    global hold_heading, prev_speed_cmd
 
     dx = env.goal_pos[0] - obs[0]
     dy = env.goal_pos[1] - obs[1]
     current_speed = obs[3]
+
     dist = np.hypot(dx, dy)
+    brake_dist = BRAKE_GAIN * (current_speed ** 2) / (2 * MAX_DECEL * DT)
 
-    if dist < GOAL_DIST_TOL:
+    if dist < GOAL_DIST_TOL + brake_dist:
+        # Arrived (or close enough that we should be coasting in): stop,
+        # hold current heading. Numeric (not ["Stop","Stop"]) because
+        # control_env.step(action) unpacks action as floats.
         prev_speed_cmd = 0.0
-        return np.array([0.0, obs[2]])  # Goal reached: stop, hold current heading
+        return np.array([0.0, obs[2]])
 
-    heading_cmd = np.arctan2(dx, dy)  # 0 rad = +y convention -> atan2(dx, dy)
+    heading_cmd = np.arctan2(dx, dy)   # 0 rad = +y convention
+    hold_heading = heading_cmd
 
-    # Shortest angular error between current and desired heading, in [-pi, pi)
+    # Turn before driving. Squared so misalignment bites harder: at 45 deg
+    # off, speed drops to 50% rather than 71%, so the pivot finishes before
+    # the ball builds momentum into a corridor wall.
     heading_error = (heading_cmd - obs[2] + np.pi) % (2 * np.pi) - np.pi
+    align = max(0.0, np.cos(heading_error)) ** 2
 
-    # Raw speed command (PD control on distance/speed)
-    raw_speed_cmd = KP * dist - KD * current_speed
+    speed_limit = min(SPEED_CAP, env.vel_limit)
+    target_speed = np.clip((KP * dist - KD * current_speed) * align,
+                           0.00, speed_limit)
 
-    # Heading-coupled speed limiting: slow down the more we need to turn.
-    # np.pi/4 (45 degrees) is used as a scaling factor here.
-    turn_penalty = max(0.0, 1.0 - (abs(heading_error) / (np.pi / 4)))
-    raw_speed_cmd *= turn_penalty
-    target_speed = np.clip(raw_speed_cmd, 0.0, env.vel_limit)
-
-    # Slew rate limiting (anti-slip): don't let the requested speed jump too
-    # fast from the previous one
+    # Ramp toward the target rather than jumping to it.
     speed_cmd = np.clip(
         target_speed,
         prev_speed_cmd - MAX_DECEL_STEP,
         prev_speed_cmd + MAX_ACCEL_STEP,
     )
-
     prev_speed_cmd = speed_cmd
 
     return np.array([speed_cmd, heading_cmd])

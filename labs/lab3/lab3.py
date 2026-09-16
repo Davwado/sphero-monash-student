@@ -4,6 +4,7 @@ from sphero_env.robot.robot import Robot
 from sphero_env.envs import SpheroEnv
 
 import argparse
+import csv
 import numpy as np
 
 from types import SimpleNamespace
@@ -20,28 +21,16 @@ LAB1_SEED = 0
 MAX_STEPS = 5000
 map = build_occupancy_grid()
 
-# Where the robot is physically placed at the start, in map coordinates.
+# Replace with your actual student ID before submitting.
+STUDENT_ID = "your_id_here"
+
 START_XY = np.array([-0.5, -0.5])
 
-# --- Simulator timing ------------------------------------------------------
-# Note SpheroEnv ignores its own dt whenever a custom dynamics= is passed (see
-# sphero_env.py step(): self.dt only feeds _base_dynamics), so dt is only a
-# real knob because dynamics() below actually reads SIM_DT.
-#
-# Nothing paces the loop against wall-clock time - the visualiser just caps
-# drawing at 60fps - so one step is one rendered frame and SIM_DT sets how
-# much simulated time each frame covers. A full run is ~134s of simulated
-# time, so at SIM_DT=0.1 it plays back in ~22 real seconds.
 SIM_DT = 0.1
 
-# Plant limits for the SIMULATED robot, in physical units (rad/s, m/s^2).
-# Deliberately NOT the constants from EKF.py: those (MAX_TURN_RATE=0.3,
-# MAX_ACCEL=0.003) were fitted to the real robot's ~2.95s bluetooth command
-# cadence, and at any sane sim timestep they make the ball crawl - 0.003 m/s^2
-# needs ~50s of simulated time just to reach the 0.15 m/s speed limit.
-SIM_MAX_TURN_RATE = 3.0   # rad/s   -> 90 deg turn in ~0.5s
-SIM_MAX_ACCEL = 0.3       # m/s^2   -> 0 to vel_limit in ~0.5s
-SIM_MAX_DECEL = 0.5       # m/s^2
+SIM_MAX_TURN_RATE = 3.0
+SIM_MAX_ACCEL = 0.3
+SIM_MAX_DECEL = 0.5
 
 
 def wrap_angle(angle):
@@ -50,10 +39,6 @@ def wrap_angle(angle):
 
 def dynamics(state, action):
     """Rate-limited unicycle plant for the simulator.
-
-    Same shape as EKF.dynamics - absolute heading command, top speed rolled
-    off by cos(heading_error) - but driven by SIM_DT and the sim plant limits
-    above, so simulated time advances uniformly no matter what SIM_DT is set to.
 
     action: [speed_cmd, heading_cmd]
     state:  [x, y, heading, speed]
@@ -146,16 +131,6 @@ def control_loop(control_env):
 
     is_sim = isinstance(control_env, SpheroEnv)
 
-    # The plan lives in MAP coordinates (start plate at START_XY). The real
-    # Sphero's get_location() is relative to wherever it was switched on and
-    # aimed, i.e. it reads (0,0) at the start plate - a different frame.
-    #
-    # In sim the two are reconciled by force-writing the start pose below. On
-    # hardware that write is silently discarded, because Robot.step() rebuilds
-    # state_odom from the API on every single step. The result last run: the
-    # robot read itself at (0,0), was told to drive to wp0 = (-0.5,-0.5), and
-    # set off at -138 deg - straight out of the start plate to the southwest.
-    # So record the offset between the two frames and shift every reading.
     if is_sim:
         control_env.state_true[0:3] = np.array([-0.5, -0.5, 0.0])
         control_env.state_odom[0:3] = np.array([-0.5, -0.5, 0.0])
@@ -174,37 +149,23 @@ def control_loop(control_env):
 
     rng = np.random.default_rng(LAB1_SEED)
 
-    # Plan against the module-level maze, not control_env.occupancy_grid: only
-    # SpheroEnv carries that attribute, so reading it off the env crashes on
-    # hardware. It is the same grid the sim is constructed with either way.
     planner = Planner(map=map, dt=control_env.dt)
 
-    # Plan from the pose we just set above, not the stale obs returned by
-    # reset() before the overwrite.
     start_state = np.array([-0.5, -0.5, 0.0, 0.0])
 
-    # obs carries 0.05m of position noise, comparable to the gaps being driven
-    # through, so navigating straight off it makes the waypoint test trip on
-    # noise spikes and hands the controller a jittering bearing. Filter it.
-    # Sim only: on hardware this would put an unvalidated filter in the loop
-    # you already tuned against raw readings, so leave that path as tested.
     if is_sim:
         ekf = EKF(dt=control_env.dt, dynamics_fn=dynamics)
-        # The sim's plant model is known exactly, so trust it and let the
-        # filter do real smoothing. EKF.py's defaults assume the much less
-        # certain real-robot model and barely filter at all here.
-        ekf.Q = np.diag([1e-5, 1e-5, 1e-5, 1e-5])
+        ekf.Q = np.diag([1e-4, 1e-4, 1e-4, 1e-4])
         ekf.R = np.diag([0.05**2, 0.05**2, 0.025**2, 0.025**2])
-        ekf.state_est = start_state.astype(float).copy()
-        ekf.P = np.eye(4) * 1e-4
-        est = ekf.state_est.copy()
     else:
-        ekf = None
-        est = to_map(obs)
+        ekf = EKF(dt=2.95)
+        ekf.Q = np.diag([0.01, 0.01, 0.02, 0.01])
+        ekf.R = np.diag([0.01, 0.01, 0.04, 0.02])
 
-    # margin_cells=0: this maze's corridors are only as wide as a single
-    # connector cell, so any wall inflation blocks the only free passage.
-    # Wall-clipping is instead handled at runtime via collision + replan.
+    ekf.state_est = start_state.astype(float).copy()
+    ekf.P = np.eye(4) * 1e-3
+    est = ekf.state_est.copy()
+
     waypoints = planner.plan(start_state, control_env.goal_pos, margin_cells=0)
 
     print(f"Planned {len(waypoints)} waypoints")
@@ -212,99 +173,145 @@ def control_loop(control_env):
         print(f"  wp{i}: {wp}")
 
     steps = 0
-
-    # A waypoint must be hit far more tightly than the goal. Corridors here are
-    # one occupancy cell wide, so the robot centre only has grid_resolution/2 =
-    # 0.0625m of lateral room. Accepting a waypoint at goal_tolerance (0.1m)
-    # let it turn for the next one while still 0.1m off-centre, which aims it
-    # diagonally into the corridor wall - that's the "drove into a wall".
-    # Must also stay above controller.GOAL_DIST_TOL, or the controller parks
-    # just outside the acceptance radius and the loop stalls.
-    WAYPOINT_TOLERANCE = 0.03
-
-    # Budget in simulated time, not raw steps, so it doesn't silently become a
-    # different limit whenever SIM_DT changes.
+    WAYPOINT_TOLERANCE = 0.02
     MAX_STEPS_PER_WAYPOINT = int(60.0 / control_env.dt)
     MAX_REPLANS = 10
     replans = 0
     reached_goal = False
 
-    wp_index = 0
-    while wp_index < len(waypoints) and steps < MAX_STEPS:
-        waypoint = waypoints[wp_index]
-        wp_steps = 0
-        collided = False
+    collisions_at_wp = {}
+    MAX_COLLISIONS_PER_WP = 2
 
-        # controller.compute_action() steers toward env.goal_pos, so hand it
-        # a lightweight stand-in whose goal_pos is the current waypoint.
-        wp_target = SimpleNamespace(goal_pos=waypoint, vel_limit=control_env.vel_limit)
+    # Alternate escape direction each time, so a failed escape isn't simply
+    # repeated. Last run reversed to the identical position twice running.
+    escape_sign = 1
 
-        while wp_steps < MAX_STEPS_PER_WAYPOINT and steps < MAX_STEPS:
-            action = controller.compute_action(wp_target, est, steps)
-            if ekf is not None:
+    csv_file = open(f"{STUDENT_ID}_lab3.csv", "w", newline="")
+    csv_writer = csv.writer(csv_file)
+    csv_writer.writerow(["sim_x", "sim_y", "real_x", "real_y"])
+
+    def log_row():
+        if is_sim:
+            sim_xy = control_env.state_true[0:2]
+        else:
+            sim_xy = ("", "")
+        csv_writer.writerow([sim_xy[0], sim_xy[1], est[0], est[1]])
+
+    try:
+        wp_index = 0
+        while wp_index < len(waypoints) and steps < MAX_STEPS:
+            waypoint = waypoints[wp_index]
+            wp_steps = 0
+            collided = False
+
+            wp_target = SimpleNamespace(goal_pos=waypoint, vel_limit=control_env.vel_limit)
+
+            while wp_steps < MAX_STEPS_PER_WAYPOINT and steps < MAX_STEPS:
+                action = controller.compute_action(wp_target, est, steps)
                 ekf.predict(action)
-            obs, _, terminated, truncated, info = control_env.step(action)
-            est = ekf.update(to_map(obs))[0] if ekf is not None else to_map(obs)
-            control_env.render()
-
-            wp_steps += 1
-            steps += 1
-
-            collided = info.get("collision", False) if isinstance(info, dict) else False
-            if not collided and len(obs) > 4:
-                collided = bool(obs[4])
-            if collided:
-                break
-
-            dist_to_goal_sq = (est[0]-control_env.goal_pos[0])**2 + (est[1]-control_env.goal_pos[1])**2
-            if dist_to_goal_sq < control_env.goal_tolerance**2:
-                reached_goal = True
-                break
-
-            dist_to_wp_sq = (est[0]-waypoint[0])**2 + (est[1]-waypoint[1])**2
-            if dist_to_wp_sq < WAYPOINT_TOLERANCE**2:
-                print(f"Reached waypoint {wp_index}: {waypoint}")
-                break
-
-        if reached_goal:
-            print("Goal reached.")
-            break
-
-        if collided and replans < MAX_REPLANS:
-            print(f"Collision near wp{wp_index}, step {wp_steps} - backing off and replanning")
-
-            # Back off for several steps, not just one, so the ball
-            # actually clears the wall before replanning
-            back_off = np.array([-0.1, 0.0], dtype=np.float32)
-            for _ in range(5):
-                if ekf is not None:
-                    ekf.predict(back_off)
-                obs, _, terminated, truncated, info = control_env.step(back_off)
-                est = ekf.update(to_map(obs))[0] if ekf is not None else to_map(obs)
+                obs, _, terminated, truncated, info = control_env.step(action)
+                est = ekf.update(to_map(obs))[0]
                 control_env.render()
+                log_row()
+
+                wp_steps += 1
                 steps += 1
 
-            try:
-                waypoints = planner.plan(est, control_env.goal_pos, margin_cells=0)
-                wp_index = 0
-                replans += 1
-                print(f"Replanned {len(waypoints)} waypoints "
-                      f"(replan #{replans}) from ({est[0]:.3f}, {est[1]:.3f})")
-                continue
-            except (ValueError, RuntimeError) as e:
-                print(f"Replan failed: {e} - continuing with old plan")
+                collided = info.get("collision", False) if isinstance(info, dict) else False
+                if not collided and len(obs) > 4:
+                    collided = bool(obs[4])
+                if collided:
+                    break
 
-        if wp_steps >= MAX_STEPS_PER_WAYPOINT:
-            print(f"Timed out on waypoint {wp_index}: {waypoint} "
-                  f"(stuck at {est[0]:.3f}, {est[1]:.3f})")
+                dist_to_goal_sq = (est[0]-control_env.goal_pos[0])**2 + (est[1]-control_env.goal_pos[1])**2
+                if dist_to_goal_sq < control_env.goal_tolerance**2:
+                    reached_goal = True
+                    break
 
-        wp_index += 1
+                dist_to_wp_sq = (est[0]-waypoint[0])**2 + (est[1]-waypoint[1])**2
+                if dist_to_wp_sq < WAYPOINT_TOLERANCE**2:
+                    print(f"Reached waypoint {wp_index}: {waypoint}")
+                    break
 
-    if not reached_goal:
-        final_dist = np.hypot(est[0]-control_env.goal_pos[0], est[1]-control_env.goal_pos[1])
-        print(f"Path complete but goal not reached. Final distance: {final_dist:.3f} m")
+            if reached_goal:
+                print("Goal reached.")
+                break
 
-    control_env.emergency_stop()
+            if collided:
+                key = (round(float(waypoint[0]), 3), round(float(waypoint[1]), 3))
+                collisions_at_wp[key] = collisions_at_wp.get(key, 0) + 1
+
+                if collisions_at_wp[key] > MAX_COLLISIONS_PER_WP:
+                    print(f"Waypoint {waypoint} has collided "
+                          f"{collisions_at_wp[key]} times - skipping it")
+                    wp_index += 1
+                    controller.reset()
+                    continue
+
+                if replans < MAX_REPLANS:
+                    print(f"Collision near wp{wp_index}, step {wp_steps} - escaping")
+
+                    pos_before = np.array([est[0], est[1]])
+
+                    # Reverse FIRST to break contact. Pivoting while wedged
+                    # against a wall does nothing - last run's escape left
+                    # the ball at the identical position twice running.
+                    for _ in range(8):
+                        straight_back = np.array([-0.08, est[2]], dtype=np.float32)
+                        ekf.predict(straight_back)
+                        obs, _, terminated, truncated, info = control_env.step(straight_back)
+                        est = ekf.update(to_map(obs))[0]
+                        control_env.render()
+                        log_row()
+                        steps += 1
+
+                    # Now that contact should be broken, turn away and back
+                    # off further, alternating side each escape so a failed
+                    # attempt isn't simply repeated.
+                    escape_heading = wrap_angle(est[2] + escape_sign * np.pi / 2)
+                    escape_sign *= -1
+
+                    for _ in range(6):
+                        away = np.array([-0.08, escape_heading], dtype=np.float32)
+                        ekf.predict(away)
+                        obs, _, terminated, truncated, info = control_env.step(away)
+                        est = ekf.update(to_map(obs))[0]
+                        control_env.render()
+                        log_row()
+                        steps += 1
+
+                    moved = np.hypot(est[0]-pos_before[0], est[1]-pos_before[1])
+                    if moved < 0.02:
+                        print(f"  escape moved only {moved:.3f}m - ball is wedged, "
+                              f"skipping this waypoint")
+                        wp_index += 1
+                        controller.reset()
+                        continue
+
+                    try:
+                        waypoints = planner.plan(est, control_env.goal_pos, margin_cells=0)
+                        wp_index = 0
+                        controller.reset()
+                        replans += 1
+                        print(f"Replanned {len(waypoints)} waypoints "
+                              f"(replan #{replans}) from ({est[0]:.3f}, {est[1]:.3f})")
+                        continue
+                    except (ValueError, RuntimeError) as e:
+                        print(f"Replan failed: {e} - continuing with old plan")
+
+            if wp_steps >= MAX_STEPS_PER_WAYPOINT:
+                print(f"Timed out on waypoint {wp_index}: {waypoint} "
+                      f"(stuck at {est[0]:.3f}, {est[1]:.3f})")
+
+            wp_index += 1
+
+        if not reached_goal:
+            final_dist = np.hypot(est[0]-control_env.goal_pos[0], est[1]-control_env.goal_pos[1])
+            print(f"Path complete but goal not reached. Final distance: {final_dist:.3f} m")
+
+    finally:
+        csv_file.close()
+        control_env.emergency_stop()
 
 
 def main(argv=None):
