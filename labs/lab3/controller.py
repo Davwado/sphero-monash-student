@@ -1,20 +1,12 @@
-"""Lab 3 controller — brake-distance PD controller with slew-rate limiting.
-
-Tuned for slow, methodical waypoint-to-waypoint motion: the ball should
-approach each waypoint, settle, pivot, then move off gently. Top speed is
-capped well below the env's vel_limit because momentum is what causes both
-the overshoot and the wall contact - a slower ball has time to correct.
+"""Lab 3 controller — PD with turn-in-place and corner-commit phases.
 
 Interfaces:
     obs    = [x (m), y (m), heading (rad), speed (m/s), collision_flag (0/1)]
-    action = [speed_cmd (m/s, env clips to +/-0.15), heading_cmd (rad)]
+    action = [speed_cmd (m/s), heading_cmd (rad)]
 
-Heading convention: 0 rad points along +y ("up" in the window), +pi/2 points
-along +x. heading_cmd is a desired absolute heading, not a turn rate.
+Heading convention: 0 rad points along +y, +pi/2 points along +x.
 """
 import numpy as np
-
-hold_heading = 0
 
 MAX_DECEL = 0.01
 DT = 2.95
@@ -22,70 +14,109 @@ DT = 2.95
 KP = 0.18
 KD = 0.45
 
-# Hard cap on commanded speed, below the env's vel_limit of 0.15. This is the
-# main knob for "slower": KP only controls the command until it clips, so
-# capping here bounds top speed on the long legs regardless of distance.
-SPEED_CAP = 0.06
-
-# Arrival radius. Kept below lab3.py's WAYPOINT_TOLERANCE (0.02) so the
-# controller doesn't park just outside the acceptance radius and stall.
+SPEED_CAP = 0.15
 GOAL_DIST_TOL = 0.015
-
-# Brake-distance multiplier. Higher = starts slowing earlier. Raised from 1.5
-# because the ball was consistently overshooting - it couldn't shed momentum
-# in the distance it was allowing itself.
 BRAKE_GAIN = 3.0
 
-# Slew-rate limits on the speed COMMAND, per step. Without these, arriving at
-# a waypoint and switching to the next makes dist jump ~13x in one step with
-# nothing damping it, producing a lurch at exactly the moment the ball is
-# also being told to turn for the next leg. ACCEL lowered to 0.008 so the
-# ramp takes ~8 steps rather than 3.
 MAX_ACCEL_STEP = 0.008
 MAX_DECEL_STEP = 0.04
 
+TURN_THRESHOLD = np.radians(35)
+TURN_EXIT = np.radians(10)
+
+# Inside this radius, stop recomputing the bearing and drive straight on the
+# heading we already have. Two reasons:
+#  - the loop accepts arrival at WAYPOINT_TOLERANCE (5cm) short of the plate
+#    centre, so without this the ball starts turning for the next leg while
+#    still 5cm inside the current plate, and cuts the corner. The ball has
+#    real diameter, so a cut corner means clipping the wall.
+#  - arctan2(dx, dy) gets very sensitive as dist shrinks: at 3cm out, a 1cm
+#    wobble swings the commanded bearing 30+ degrees, which is what made the
+#    ball hunt in place when the tolerance itself was tightened instead.
+COMMIT_RADIUS = 0.08
+
 prev_speed_cmd = 0.0
+turning = False
+turn_target = 0.0
+committed_heading = None
+
+
+def wrap_angle(angle):
+    return (angle + np.pi) % (2.0 * np.pi) - np.pi
 
 
 def reset():
-    """Call after a replan so heading/slew history doesn't carry over."""
-    global hold_heading, prev_speed_cmd
-    hold_heading = 0
+    """Call after a replan so slew/turn/commit state doesn't carry over."""
+    global prev_speed_cmd, turning, turn_target, committed_heading
     prev_speed_cmd = 0.0
+    turning = False
+    turn_target = 0.0
+    committed_heading = None
 
 
 def compute_action(env, obs, step):
     """Return action = [speed_cmd, heading_cmd] for the current observation."""
-    global hold_heading, prev_speed_cmd
+    global prev_speed_cmd, turning, turn_target, committed_heading
 
     dx = env.goal_pos[0] - obs[0]
     dy = env.goal_pos[1] - obs[1]
     current_speed = obs[3]
+    heading = obs[2]
 
     dist = np.hypot(dx, dy)
     brake_dist = BRAKE_GAIN * (current_speed ** 2) / (2 * MAX_DECEL * DT)
 
     if dist < GOAL_DIST_TOL + brake_dist:
-        # Arrived (or close enough that we should be coasting in): stop,
-        # hold current heading. Numeric (not ["Stop","Stop"]) because
-        # control_env.step(action) unpacks action as floats.
         prev_speed_cmd = 0.0
-        return np.array([0.0, obs[2]])
+        turning = False
+        committed_heading = None
+        return np.array([0.0, heading])
 
-    heading_cmd = np.arctan2(dx, dy)   # 0 rad = +y convention
-    hold_heading = heading_cmd
+    # --- commit phase -----------------------------------------------------
+    # Close to the waypoint: lock the heading and drive straight through
+    # rather than re-aiming at a target that's nearly underneath us.
+    if dist < COMMIT_RADIUS:
+        if committed_heading is None:
+            committed_heading = np.arctan2(dx, dy)
 
-    # Turn before driving. Squared so misalignment bites harder: at 45 deg
-    # off, speed drops to 50% rather than 71%, so the pivot finishes before
-    # the ball builds momentum into a corridor wall.
-    heading_error = (heading_cmd - obs[2] + np.pi) % (2 * np.pi) - np.pi
+        speed_limit = min(SPEED_CAP, env.vel_limit)
+        target_speed = np.clip(KP * dist - KD * current_speed,
+                               0.00, speed_limit)
+        speed_cmd = np.clip(
+            target_speed,
+            prev_speed_cmd - MAX_DECEL_STEP,
+            prev_speed_cmd + MAX_ACCEL_STEP,
+        )
+        prev_speed_cmd = speed_cmd
+        return np.array([speed_cmd, committed_heading])
+
+    committed_heading = None
+    desired_heading = np.arctan2(dx, dy)
+
+    # --- turn phase -------------------------------------------------------
+    if turning:
+        # Hold the ORIGINAL target throughout the turn. Recomputing it each
+        # step makes the ball chase a moving setpoint.
+        if abs(wrap_angle(turn_target - heading)) < TURN_EXIT:
+            turning = False
+        else:
+            prev_speed_cmd = 0.0
+            return np.array([0.0, turn_target])
+
+    if abs(wrap_angle(desired_heading - heading)) > TURN_THRESHOLD:
+        turning = True
+        turn_target = desired_heading
+        prev_speed_cmd = 0.0
+        return np.array([0.0, turn_target])
+
+    # --- drive phase ------------------------------------------------------
+    heading_error = wrap_angle(desired_heading - heading)
     align = max(0.0, np.cos(heading_error)) ** 2
 
     speed_limit = min(SPEED_CAP, env.vel_limit)
     target_speed = np.clip((KP * dist - KD * current_speed) * align,
                            0.00, speed_limit)
 
-    # Ramp toward the target rather than jumping to it.
     speed_cmd = np.clip(
         target_speed,
         prev_speed_cmd - MAX_DECEL_STEP,
@@ -93,4 +124,4 @@ def compute_action(env, obs, step):
     )
     prev_speed_cmd = speed_cmd
 
-    return np.array([speed_cmd, heading_cmd])
+    return np.array([speed_cmd, desired_heading])
