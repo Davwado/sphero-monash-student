@@ -16,7 +16,30 @@ LAB1_SEED = 0
 MAX_STEPS = 5000
 map = build_occupancy_grid()
 
+<<<<<<< Updated upstream
 ### Custom dynamics function for the Sphero robot - replace this with the one you developed in Lab 1
+=======
+# Replace with your actual student ID before submitting.
+STUDENT_ID = "your_id_here"
+
+START_XY = np.array([-0.5, -0.5])
+
+SIM_DT = 0.1
+
+SIM_MAX_TURN_RATE = 3.0
+SIM_MAX_ACCEL = 0.3
+SIM_MAX_DECEL = 0.5
+
+# Set False to silence the per-step diagnostic print.
+VERBOSE = True
+
+# Warn when the filtered estimate and the raw reading disagree by more than
+# this. Not a rejection gate - just a flag, so a broken sensor shows up in
+# the log instead of being silently smoothed into a fake clean run.
+DIVERGENCE_WARN = 0.25
+
+
+>>>>>>> Stashed changes
 def wrap_angle(angle):
     return (angle + np.pi) % (2.0 * np.pi) - np.pi  # Normalize to [-pi, pi)
 
@@ -121,6 +144,7 @@ def control_loop(control_env):
     controller = Controller(dt=control_env.dt)
     planner = Planner(map=control_env.occupancy_grid, dt=control_env.dt)
 
+<<<<<<< Updated upstream
     waypoints = planner.plan(obs, control_env.goal_pos)
 
     steps = 0
@@ -132,6 +156,50 @@ def control_loop(control_env):
 
             if (obs[0]-waypoint[0])**2 + (obs[1]-waypoint[1])**2 < control_env.goal_tolerance**2:
                 continue  # Move to the next waypoint if close enough
+=======
+    start_state = np.array([-0.5, -0.5, 0.0, 0.0])
+
+    if is_sim:
+        ekf = EKF(dt=control_env.dt, dynamics_fn=dynamics)
+        ekf.Q = np.diag([1e-4, 1e-4, 1e-4, 1e-4])
+        ekf.R = np.diag([0.05**2, 0.05**2, 0.025**2, 0.025**2])
+    else:
+        # Real robot: ~10:1 R/Q on position. Enough to smooth the step-to-step
+        # wobble, but still anchored to the measurement over time.
+        #
+        # A previous 500:1 ratio was a mistake: it made the filter effectively
+        # deaf, so when the odometry broke (position jumped 0.7m after the
+        # ball was picked up) the estimate simply integrated the motion model
+        # and drew the path that had been COMMANDED, reporting "Goal reached"
+        # for a run where the ball had gone the wrong way. A filter that
+        # can't be contradicted turns a sensor failure into a silent one.
+        ekf = EKF(dt=2.95)
+        ekf.Q = np.diag([0.002, 0.002, 0.005, 0.005])
+        ekf.R = np.diag([0.02, 0.02, 0.05, 0.05])
+
+    ekf.state_est = start_state.astype(float).copy()
+    ekf.P = np.eye(4) * 1e-3
+    est = ekf.state_est.copy()
+
+    waypoints = planner.plan(start_state, control_env.goal_pos, margin_cells=0)
+
+    print(f"Planned {len(waypoints)} waypoints")
+    for i, wp in enumerate(waypoints):
+        print(f"  wp{i}: {wp}")
+
+    steps = 0
+
+    # Loosened from 0.02: a tight radius makes the ball spin in place at each
+    # waypoint, because arctan2(dx, dy) gets very sensitive as dist shrinks.
+    # Still well inside the corridor half-width (grid_resolution/2 = 6.25cm).
+    WAYPOINT_TOLERANCE = 0.05
+
+    MAX_STEPS_PER_WAYPOINT = int(60.0 / control_env.dt)
+    MAX_REPLANS = 10
+    replans = 0
+    reached_goal = False
+    warned_divergence = False
+>>>>>>> Stashed changes
 
             if (obs[0]-control_env.goal_pos[0])**2 + (obs[1]-control_env.goal_pos[1])**2 < control_env.goal_tolerance**2:
                 break  # Move to the next waypoint if close enough
@@ -140,7 +208,124 @@ def control_loop(control_env):
 
         steps += 1
 
+<<<<<<< Updated upstream
     control_env.emergency_stop()
+=======
+            wp_target = SimpleNamespace(goal_pos=waypoint, vel_limit=control_env.vel_limit)
+
+            while wp_steps < MAX_STEPS_PER_WAYPOINT and steps < MAX_STEPS:
+                action = controller.compute_action(wp_target, est, steps)
+                ekf.predict(action)
+                obs, _, terminated, truncated, info = control_env.step(action)
+                est = ekf.update(to_map(obs))[0]
+                control_env.render()
+                log_row()
+
+                raw = to_map(obs)
+
+                if VERBOSE:
+                    print(f"  wp{wp_index} s{wp_steps}: "
+                          f"raw=({raw[0]:.3f},{raw[1]:.3f}) "
+                          f"est=({est[0]:.3f},{est[1]:.3f}) "
+                          f"hdg={np.degrees(est[2]):.0f}° spd={est[3]:.3f} "
+                          f"-> tgt=({waypoint[0]:.2f},{waypoint[1]:.2f}) "
+                          f"cmd_spd={action[0]:.3f} "
+                          f"cmd_hdg={np.degrees(action[1]):.0f}°")
+
+                gap = np.hypot(raw[0]-est[0], raw[1]-est[1])
+                if gap > DIVERGENCE_WARN and not warned_divergence:
+                    print(f"  *** WARNING: estimate and raw reading disagree by "
+                          f"{gap:.3f}m. The odometry has probably broken (this "
+                          f"happens if the ball is picked up mid-run). Anything "
+                          f"logged after this point is unreliable. ***")
+                    warned_divergence = True
+
+                wp_steps += 1
+                steps += 1
+
+                collided = info.get("collision", False) if isinstance(info, dict) else False
+                if not collided and len(obs) > 4:
+                    collided = bool(obs[4])
+                if collided:
+                    break
+
+                dist_to_goal_sq = (est[0]-control_env.goal_pos[0])**2 + (est[1]-control_env.goal_pos[1])**2
+                if dist_to_goal_sq < control_env.goal_tolerance**2:
+                    reached_goal = True
+                    break
+
+                dist_to_wp_sq = (est[0]-waypoint[0])**2 + (est[1]-waypoint[1])**2
+                if dist_to_wp_sq < WAYPOINT_TOLERANCE**2:
+                    print(f"Reached waypoint {wp_index}: {waypoint}")
+                    break
+
+            if reached_goal:
+                print("Goal reached.")
+                if warned_divergence:
+                    print("  (NOTE: a divergence warning fired earlier in this "
+                          "run, so this result may not reflect where the ball "
+                          "physically ended up.)")
+                break
+
+            if collided and replans < MAX_REPLANS:
+                print(f"Collision near wp{wp_index}, step {wp_steps} - escaping")
+
+                pos_before = np.array([est[0], est[1]])
+
+                for _ in range(8):
+                    straight_back = np.array([-0.08, est[2]], dtype=np.float32)
+                    ekf.predict(straight_back)
+                    obs, _, terminated, truncated, info = control_env.step(straight_back)
+                    est = ekf.update(to_map(obs))[0]
+                    control_env.render()
+                    log_row()
+                    steps += 1
+
+                moved = np.hypot(est[0]-pos_before[0], est[1]-pos_before[1])
+
+                # Zero movement means the ball is being HELD (picked up), not
+                # wedged against a wall. Skipping the waypoint here throws
+                # away a leg of the path and makes the next leg cut a
+                # diagonal across the maze. Wait and retry the SAME waypoint.
+                if moved < 0.005:
+                    print(f"  ball didn't move ({moved:.3f}m) - held or stalled, "
+                          f"waiting rather than skipping")
+                    for _ in range(20):
+                        hold = np.array([0.0, est[2]], dtype=np.float32)
+                        ekf.predict(hold)
+                        obs, _, terminated, truncated, info = control_env.step(hold)
+                        est = ekf.update(to_map(obs))[0]
+                        control_env.render()
+                        log_row()
+                        steps += 1
+                    controller.reset()
+                    continue
+
+                try:
+                    waypoints = planner.plan(est, control_env.goal_pos, margin_cells=0)
+                    wp_index = 0
+                    controller.reset()
+                    replans += 1
+                    print(f"Replanned {len(waypoints)} waypoints "
+                          f"(replan #{replans}) from ({est[0]:.3f}, {est[1]:.3f})")
+                    continue
+                except (ValueError, RuntimeError) as e:
+                    print(f"Replan failed: {e} - continuing with old plan")
+
+            if wp_steps >= MAX_STEPS_PER_WAYPOINT:
+                print(f"Timed out on waypoint {wp_index}: {waypoint} "
+                      f"(stuck at {est[0]:.3f}, {est[1]:.3f})")
+
+            wp_index += 1
+
+        if not reached_goal:
+            final_dist = np.hypot(est[0]-control_env.goal_pos[0], est[1]-control_env.goal_pos[1])
+            print(f"Path complete but goal not reached. Final distance: {final_dist:.3f} m")
+
+    finally:
+        csv_file.close()
+        control_env.emergency_stop()
+>>>>>>> Stashed changes
 
 
 def main(argv=None):
