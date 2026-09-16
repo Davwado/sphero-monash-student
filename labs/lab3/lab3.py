@@ -97,12 +97,19 @@ def make_real_env(api):
 
 def _fast_managed_api():
     """Lazy import so the fast_comms path is only pulled in when --fast-comms
-    is actually passed - it lives alongside lab2, not lab3."""
+    is actually passed - it lives alongside lab2, not lab3.
+
+    Unlike lab1/lab2, control_loop() below actually reads info["collision"]
+    (and obs[4]) to trigger the escape/replan logic when the ball hits a
+    maze wall - so unlike fast_comms' locator-only default, this needs
+    accelerometer/velocity/gyroscope streamed too, or Robot._sense_collision()
+    silently always reports no collision and the escape logic never fires.
+    """
     import os
     import sys
     sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "lab2", "fast_comms"))
     from fast_link import fast_managed_api
-    return fast_managed_api()
+    return fast_managed_api(sensors=("locator", "accelerometer", "velocity", "gyroscope"))
 
 
 @contextmanager
