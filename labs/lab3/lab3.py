@@ -95,9 +95,18 @@ def make_real_env(api):
         window_size=(800, 800),
     )
 
+def _fast_managed_api():
+    """Lazy import so the fast_comms path is only pulled in when --fast-comms
+    is actually passed - it lives alongside lab2, not lab3."""
+    import os
+    import sys
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "lab2", "fast_comms"))
+    from fast_link import fast_managed_api
+    return fast_managed_api()
+
 
 @contextmanager
-def managed_env(sim: bool):
+def managed_env(sim: bool, fast_comms: bool = False):
     if sim:
         sim_env = make_sim_env()
         sim_env.set_log_path("logs/lab3_sim.csv")
@@ -107,6 +116,20 @@ def managed_env(sim: bool):
         finally:
             sim_env.stop_logging()
             sim_env.close()
+    elif fast_comms:
+        # See labs/lab2/fast_comms/fast_link.py - drives through a low-latency
+        # BLE path instead of SpheroEduAPI, but presents the same interface
+        # Robot expects from `api`, so make_real_env() below is unchanged.
+        with _fast_managed_api() as api:
+            real_env = make_real_env(api)
+            real_env.set_log_path("logs/lab3_real.csv")
+
+            real_env.start_logging()
+            try:
+                yield real_env
+            finally:
+                real_env.close()
+                real_env.stop_logging()
     else:
         with ExitStack() as stack:
             selected_toy, _ = scan_and_connect()
@@ -317,9 +340,12 @@ def control_loop(control_env):
 def main(argv=None):
     parser = argparse.ArgumentParser()
     parser.add_argument("--sim", action="store_true", help="Run simulation")
+    parser.add_argument("--fast-comms", action="store_true",
+                        help="Real robot only: drive through labs/lab2/fast_comms' low-latency "
+                             "BLE path instead of SpheroEduAPI (see fast_link.py)")
     args = parser.parse_args(argv)
 
-    with managed_env(args.sim) as control_env:
+    with managed_env(args.sim, fast_comms=args.fast_comms) as control_env:
         control_loop(control_env)
 
 
