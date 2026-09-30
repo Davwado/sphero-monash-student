@@ -42,6 +42,9 @@ class Visualiser:
         self._overlay_true_traj = None
         self.belief_mean = None
         self.belief_cov = None
+        self.waypoints = None  # list of (x, y) - see set_waypoints()
+        self.waypoint_zones = None      # list of (wp_xy, dir_xy_or_None) - see set_waypoint_zones()
+        self.waypoint_tolerance = 0.0
         self.visual_occupancy_grid = None
         self.distance_map = None
         self.screen = None
@@ -128,6 +131,35 @@ class Visualiser:
 
     def set_goal(self, goal_pos):
         self.goal_pos = np.array(goal_pos, dtype=np.float32)
+
+    def set_waypoints(self, waypoints):
+        """Planned path to draw as small markers + a thin connecting line,
+        e.g. from a Planner.plan() call. Pass None to clear."""
+        if waypoints is None:
+            self.waypoints = None
+            return
+        self.waypoints = [tuple(np.asarray(wp, dtype=np.float32)[:2]) for wp in waypoints]
+
+    def set_waypoint_zones(self, zones, radius):
+        """Draw the directional "reached" tolerance zone around each
+        waypoint: a semicircle on the far side of dir_xy (the direction of
+        travel into that waypoint), or a full circle when dir_xy is None
+        (e.g. the first waypoint of a plan, with no prior direction).
+
+        zones: list of (wp_xy, dir_xy_or_None). radius: tolerance in world
+        units (matches the logic that decides "reached"). Pass zones=None
+        to clear.
+        """
+        if zones is None:
+            self.waypoint_zones = None
+            return
+        cleaned = []
+        for wp, d in zones:
+            wp_arr = np.asarray(wp, dtype=np.float32)[:2]
+            d_arr = None if d is None else np.asarray(d, dtype=np.float32)[:2]
+            cleaned.append((wp_arr, d_arr))
+        self.waypoint_zones = cleaned
+        self.waypoint_tolerance = float(radius)
 
     def set_occupancy(self, grid, resolution, visual_grid=None):
         self.occupancy_grid = grid
@@ -356,11 +388,44 @@ class Visualiser:
         gx, gy = self.goal_pos
         goal_px, goal_py = world_to_screen(gx, gy)
         pygame.draw.circle(self.screen, goal_color, (goal_px, goal_py), 7)
+        # Draw planned waypoints (e.g. from Planner.plan()) - thin connecting
+        # line plus a small marker per point, distinct from the goal/traj colors.
+        if self.waypoints:
+            waypoint_color = (0, 220, 220)
+            wp_pts = [world_to_screen(wx, wy) for wx, wy in self.waypoints]
+            if len(wp_pts) >= 2:
+                pygame.draw.lines(self.screen, waypoint_color, False, wp_pts, 1)
+            for px, py in wp_pts:
+                pygame.draw.circle(self.screen, waypoint_color, (px, py), 4, 1)
+        # Draw each waypoint's directional "reached" tolerance zone - a
+        # semicircle on the far side of the approach direction (full circle
+        # if no direction is known, e.g. the first waypoint of a plan).
+        if self.waypoint_zones and self.waypoint_tolerance > 0:
+            zone_color = (0, 220, 220)
+            r = self.waypoint_tolerance
+            for wp, d in self.waypoint_zones:
+                wx, wy = float(wp[0]), float(wp[1])
+                if d is not None and (abs(float(d[0])) > 1e-9 or abs(float(d[1])) > 1e-9):
+                    base_angle = math.atan2(float(d[1]), float(d[0]))
+                    angles = np.linspace(base_angle - math.pi / 2, base_angle + math.pi / 2, 16)
+                    closed = False
+                else:
+                    angles = np.linspace(0, 2 * math.pi, 24)
+                    closed = False
+                pts = [world_to_screen(wx + r * math.cos(a), wy + r * math.sin(a)) for a in angles]
+                if len(pts) >= 2:
+                    pygame.draw.lines(self.screen, zone_color, closed, pts, 1)
+                    if d is not None:
+                        # Close the "D" shape with the flat diameter edge.
+                        pygame.draw.line(self.screen, zone_color, pts[0], pts[-1], 1)
         # Draw trajectory overlays. If explicit overlays are not set, fall back to live trajectories.
         draw_polyline(self._overlay_real_traj, (255, 120, 120), width=2)
         draw_polyline(self._overlay_odom_traj if self._overlay_odom_traj is not None else self._odom_traj, (80, 180, 255), width=2)
         draw_polyline(self._overlay_true_traj if self._overlay_true_traj is not None else self._gt_traj, (120, 255, 120), width=2)
-        draw_polyline(self._est_traj, (255, 0, 255), width=2)
+        # Pink EKF-estimate trajectory line hidden - too cluttered alongside
+        # the true/odom/overlay lines. _est_traj is still populated in case
+        # it's needed for debugging later.
+        # draw_polyline(self._est_traj, (255, 0, 255), width=2)
         draw_last_point(self._overlay_real_traj, (255, 120, 120), radius=4)
         # True pose
         if gt_state is not None:
