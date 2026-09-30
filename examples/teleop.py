@@ -13,17 +13,22 @@ from sphero_env.robot.connect import scan_and_connect
 from sphero_env.robot.robot import Robot
 from sphero_env.envs import SpheroEnv
 
+SPEED_MAX = 0.15   # real robot vel_limit: 0.15 = full motor power
+SPEED_STEP = 0.015
+STEP_PERIOD = 0.3  # real robot: fixed seconds per step, must match the Lab 4 loop
+
+
 # This function creates a new simulator environment
 def make_sim_env():
     return SpheroEnv(
         dt=0.1,
         max_steps=5000,
         action_limit=8,
-        vel_limit=0.25,
+        vel_limit=1.0,          # was 0.25 - main speed cap
         world_width=5.0,
         world_height=5.0,
-        max_turn_rate=6.0,
-        speed_scale=4.0,
+        max_turn_rate=12.0,     # was 6.0 - spin rate
+        speed_scale=8.0,        # was 4.0 - multiplies commanded speed
         goal_pos=(0.5, 0.5),
         goal_tolerance=0.05,
         occupancy_grid=None,
@@ -42,7 +47,7 @@ def make_real_env(api):
         api=api,
         dt=0.1,
         max_steps=5000,
-        vel_limit=1,
+        vel_limit=0.15,         # same as Lab 3/4 so logged speeds use the same units
         world_width=1.0,
         world_height=1.0,
         goal_pos=(0.8, 0.8),
@@ -109,14 +114,19 @@ def main(sim_only=False):
         print("  +/-     = speed")
         print("  Q       = quit\n")
 
-        speed_norm = 0.25  # normalized speed [0, 1]
+        speed_norm = 0.03  # same motor power as the old 0.2 at vel_limit=1; +/- to change
         current_heading = 0.0 if robot_env is None else float(robot_env.get_odom_state()[2])
 
         running = True
         moving = False
         last_speed_change_time = 0.0
+        loop_start, loop_steps = time.time(), 0
+        stack.callback(lambda: loop_steps and print(
+            f"{loop_steps} steps, {(time.time() - loop_start) / loop_steps:.3f} s per step on average"))
 
         while running:
+            loop_steps += 1
+            step_start = time.time()
             # Handle pygame events
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
@@ -135,15 +145,15 @@ def main(sim_only=False):
                     elif event.key in (pygame.K_PLUS, pygame.K_EQUALS, pygame.K_KP_PLUS):
                         now = time.time()
                         if now - last_speed_change_time > 0.08:
-                            speed_norm = min(1.0, speed_norm + 0.1)
-                            print(f"Speed: {speed_norm:.1f}")
+                            speed_norm = min(SPEED_MAX, speed_norm + SPEED_STEP)
+                            print(f"Speed: {speed_norm:.3f}")
                             last_speed_change_time = now
 
                     elif event.key in (pygame.K_MINUS, pygame.K_KP_MINUS):
                         now = time.time()
                         if now - last_speed_change_time > 0.08:
-                            speed_norm = max(0.0, speed_norm - 0.1)
-                            print(f"Speed: {speed_norm:.1f}")
+                            speed_norm = max(0.0, speed_norm - SPEED_STEP)
+                            print(f"Speed: {speed_norm:.3f}")
                             last_speed_change_time = now
 
             # Handle continuous key presses
@@ -210,9 +220,9 @@ def main(sim_only=False):
             env.render()
 
             if robot_env is not None:
-                time.sleep(0.01)  # Small delay to prevent busy-waiting
+                time.sleep(max(0.0, STEP_PERIOD - (time.time() - step_start)))
             else:
-                time.sleep(0.1)  # Small delay to prevent busy-waiting in sim-only mode
+                time.sleep(0.02)  # was 0.1 - 5x more responsive in sim-only mode
 
 
 if __name__ == "__main__":

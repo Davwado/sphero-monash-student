@@ -5,6 +5,7 @@ from sphero_env.envs import SpheroEnv
 
 import argparse
 import csv
+import time
 import numpy as np
 
 from types import SimpleNamespace
@@ -204,6 +205,7 @@ def control_loop(control_env):
             sim_xy = ("", "")
         csv_writer.writerow([sim_xy[0], sim_xy[1], est[0], est[1]])
 
+    loop_start = time.time()
     try:
         wp_index = 0
         while wp_index < len(waypoints) and steps < MAX_STEPS:
@@ -319,6 +321,11 @@ def control_loop(control_env):
             print(f"Path complete but goal not reached. Final distance: {final_dist:.3f} m")
 
     finally:
+        if steps:
+            timing = f"{steps} steps, {(time.time() - loop_start) / steps:.3f} s per step on average"
+            print(timing)
+            with open("logs/lab3_timing.txt", "a") as f:
+                f.write(f"{'sim' if is_sim else 'real'}: {timing}\n")
         csv_file.close()
         control_env.emergency_stop()
 
