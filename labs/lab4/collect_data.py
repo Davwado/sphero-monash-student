@@ -42,19 +42,36 @@ from sphero_unsw.sphero_edu import SpheroEduAPI
 SPEED_CAP = 0.15
 
 # --- measured on the whiteboard table, Phase 1, 2026-09-16 ------------------
-# From labs/lab4/logs/sphero_teleop_log.csv via timing_report.py. Re-measure
-# on a different surface or comms path; these are observations, not constants.
+# From labs/lab4/logs/timing_phase1_whiteboard_20260916.csv via
+# timing_report.py. Re-measure on a different surface or comms path; these
+# are observations, not constants. Both come from t_wall and x/y, which are
+# real measurements:
 #
 #   control period   0.300 s (3.3 Hz), p10/p90 0.196/0.316 - regular
-#   turn rate        0.70 rad/s median, 1.07 max (forward only, reversal
-#                    artefacts excluded - robot.py:420 flips commanded heading
-#                    by pi for negative speed, which reads as a fake 180 turn)
 #   locator refresh  1% stale at sensor_interval_ms=150 against a 300ms loop
-#
-# For reference, both existing models were wrong: lab1/dynamics.py assumes
-# 0.3 rad/s (2x too slow), the lab3 sim assumes 3.0 rad/s (4x too fast).
 MEASURED_STEP_S = 0.300
-MEASURED_TURN_RATE = 0.70
+
+# --- turn rate: NOT measured -----------------------------------------------
+# The logged `heading` and `speed` columns are the last COMMAND echoed back,
+# not sensor readings: robot.py fills state_odom[2:4] from api.get_heading()
+# and api.get_speed(). A 2026-09-16 run had logged heading within 1 deg of
+# heading_cmd, jumping 179 deg in a single step. Only x/y are measured.
+#
+# An earlier version of this file claimed a measured turn rate of 0.70 rad/s.
+# That figure was teleop's own keyboard slew (0.2 rad/frame at ~0.29 s/frame),
+# not the ball turning, and has been retracted - as has the claim that the
+# lab1 and lab3 models get turn rate wrong. The real rate is unknown.
+#
+# Real rotation is available in info["orientation"] (yaw) and
+# info["gyroscope"], and real speed in info["velocity"], but none of them are
+# logged to the CSV yet. Until they are, this schedule cannot identify the
+# heading channel whatever the holds are.
+#
+# This value only sizes the holds below. It is a deliberately generous
+# placeholder: overestimating a hold wastes a few steps, underestimating it
+# loses the steady state. Replace it once yaw is logged and a turn rate is
+# actually measured.
+ASSUMED_TURN_RATE = 0.70
 
 # Steps held at each SPEED command. The ball must be given long enough to
 # actually reach steady state, otherwise every sample is a transient and the
@@ -62,10 +79,11 @@ MEASURED_TURN_RATE = 0.70
 # 0.3s is ~2.4s, comfortably longer than the observed speed response.
 HOLD_STEPS = 8
 
-# Turns are held by ANGLE, not by a fixed step count. At 0.70 rad/s a step
-# turns ~12 deg, so a flat 8-step hold completes a 15 deg command with time
-# to spare but cuts a 180 deg command off at the halfway point - capturing
+# Turns are held by ANGLE, not by a fixed step count: a flat hold long enough
+# for a 15 deg command would cut a 180 deg command off mid-turn, capturing
 # only transient and never the steady state it is supposed to settle into.
+# The step counts come from ASSUMED_TURN_RATE above, so they are only as good
+# as that placeholder.
 TURN_SETTLE_FACTOR = 1.5   # overshoot allowance beyond the ideal-rate estimate
 MIN_TURN_HOLD = 4
 
@@ -78,7 +96,7 @@ def wrap_angle(a):
 
 def hold_for_turn(angle_rad):
     """Steps to complete a turn of this size and then settle."""
-    ideal = abs(angle_rad) / (MEASURED_TURN_RATE * MEASURED_STEP_S)
+    ideal = abs(angle_rad) / (ASSUMED_TURN_RATE * MEASURED_STEP_S)
     return max(MIN_TURN_HOLD, int(np.ceil(ideal * TURN_SETTLE_FACTOR)))
 
 
@@ -103,8 +121,8 @@ def build_schedule(speed_cap=SPEED_CAP):
     # then n-1 steady-state samples, and the transient is the informative
     # part - a dry run put 131 of 370 samples in the aligned/near-zero bin
     # for exactly this reason. Holds still need to be long enough to reach
-    # steady state on the real robot (whose turn rate is unknown and likely
-    # far slower than the sim's), so the fix is more repeats, not shorter holds.
+    # steady state on the real robot (whose turn rate is not yet measured),
+    # so the fix is more repeats, not shorter holds.
     seg = []
     for _ in range(3):
         prev = 0.0

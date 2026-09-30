@@ -216,10 +216,21 @@ def coverage_report(transitions):
     identify one parameter. What matters is whether the (heading error, speed)
     plane is covered, because that is the space the model is asked to predict
     over.
+
+    Caveat for real-robot logs: the `heading` column is the last heading
+    COMMAND echoed back by api.get_heading(), not a measurement, so
+    heading_cmd - heading is ~0 on every real row and all of them land in the
+    0-10 deg bin whatever the ball did. The heading-error axis is only
+    meaningful for sim logs until measured yaw (info["orientation"]) is logged.
     """
     if not transitions:
         print("\nNo transitions - nothing to report.")
         return
+
+    if any(t["comms"] != "sim" for t in transitions):
+        print("\n  NOTE: real-robot transitions present. Their `heading` is the "
+              "echoed command, so the heading-error rows below reflect the "
+              "command, not the ball - see coverage_report docstring.")
 
     herr = np.array([abs(wrap_angle(t["action"][1] - t["state"][2])) for t in transitions])
     spd = np.array([t["action"][0] for t in transitions])
