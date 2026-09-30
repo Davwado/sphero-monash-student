@@ -62,10 +62,10 @@ MEASURED_STEP_S = 0.300
 # not the ball turning, and has been retracted - as has the claim that the
 # lab1 and lab3 models get turn rate wrong. The real rate is unknown.
 #
-# Real rotation is available in info["orientation"] (yaw) and
-# info["gyroscope"], and real speed in info["velocity"], but none of them are
-# logged to the CSV yet. Until they are, this schedule cannot identify the
-# heading channel whatever the holds are.
+# Real rotation and speed ARE now logged, raw, in the meas_yaw_deg,
+# meas_gyro_yaw_dps and meas_vel_{x,y}_cms columns (robot runs only). Logs
+# recorded before that change have no measured heading, so they cannot
+# identify the heading channel whatever the holds are.
 #
 # This value only sizes the holds below. It is a deliberately generous
 # placeholder: overestimating a hold wastes a few steps, underestimating it

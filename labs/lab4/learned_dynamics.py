@@ -47,9 +47,10 @@ looks like a perfect fit and means nothing.
 
 So `learn_channels` defaults to ("x", "y"): the residual and the loss are
 masked to position. The heading and speed dynamics stay analytic, using
-assumed parameters (see DynamicsConfig). Once measured yaw
-(info["orientation"]) and encoder speed (info["velocity"]) are logged, add
-"heading" / "speed" to learn_channels and the same code trains them.
+assumed parameters (see DynamicsConfig). Measured yaw and encoder speed are
+now logged raw (meas_yaw_deg, meas_vel_{x,y}_cms - robot runs only). Once
+dataset.py builds the state from those instead of the echoes, add "heading" /
+"speed" to learn_channels and the same code trains them.
 
 Of the physical parameters, only `speed_scale` (real ground speed per unit of
 commanded speed) is identifiable from x/y, so it is the only one fitted by
@@ -61,8 +62,8 @@ REALLY going - and it coasts. In the Phase 1 teleop log, 35 of 107 steps with
 a zero command still moved more than 1 cm. A one-step model cannot predict that
 from echoed state, whatever its size: the information is not in the input.
 This is the main reason the position fit is weak today, and it will not be
-fixed by training harder. Put measured speed (info["velocity"]) in the state
-and it becomes learnable.
+fixed by training harder. Put measured speed (meas_vel_{x,y}_cms) in the
+state and it becomes learnable.
 
 Why float64
 -----------
