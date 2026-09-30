@@ -1,0 +1,15 @@
+{
+  "surface": "whiteboard",
+  "battery": 0.9,
+  "notes": "",
+  "sim": false,
+  "speed_cap": 0.15,
+  "hold_steps": 8,
+  "comms": "SpheroEduAPI",
+  "aim_reset": true,
+  "timestamp": "20260916-184637",
+  "steps": 383,
+  "elapsed_s": 98.81,
+  "segments": [],
+  "log": "lab4_dyn_whiteboard_20260916-184637.csv"
+}
