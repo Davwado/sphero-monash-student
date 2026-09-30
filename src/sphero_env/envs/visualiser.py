@@ -40,7 +40,19 @@ class Visualiser:
             # than assumed) are indistinguishable - and dt is exactly what a
             # fitted dynamics model needs. perf_counter is monotonic, so this
             # stays sane if the system clock steps mid-run.
-            "t_wall"
+            "t_wall",
+            # Raw sensor readings, real robot only (NaN in the simulator).
+            # The `heading` and `speed` columns above are NOT these: robot.py
+            # fills them from api.get_heading()/get_speed(), which return the
+            # last COMMAND ("target" angle/speed per the sphero_unsw docs).
+            # These are what the ball actually did. Logged raw, in the
+            # library's own units and conventions - the sign/offset of yaw
+            # relative to `heading`, and whether velocity is in the robot or
+            # world frame, have not been verified yet.
+            "meas_yaw_deg",        # api.get_orientation()["yaw"], -180..180
+            "meas_gyro_yaw_dps",   # api.get_gyroscope() yaw rate, deg/s
+            "meas_vel_x_cms",      # api.get_velocity()["x"], encoders, cm/s (+ right)
+            "meas_vel_y_cms",      # api.get_velocity()["y"], encoders, cm/s (+ forward)
         ]
         self._t0 = None
         self._gt_traj = []
@@ -194,7 +206,7 @@ class Visualiser:
         self._overlay_true_traj = _clean(true)
 
     def record(self, gt_state, odom_state, action, est_state=None, est_cov=None, setpoint=None,
-               collision=None, step_count=None):
+               collision=None, step_count=None, sensors=None):
         # Stash latest values for the HUD overlay
         self.hud_action = None if action is None else (float(action[0]), float(action[1]))
         if collision is not None:
@@ -256,6 +268,13 @@ class Visualiser:
         # so consecutive diffs measure the real control period including
         # comms latency.
         row["t_wall"] = (time.perf_counter() - self._t0) if self._t0 is not None else np.nan
+        # Measured sensors (see _columns). Anything missing stays NaN.
+        for key, value in (sensors or {}).items():
+            if key in self._columns:
+                try:
+                    row[key] = float(value)
+                except (TypeError, ValueError):
+                    row[key] = np.nan
         # Write
         if self._writer is not None:
             self._writer.writerow([row.get(col, np.nan) for col in self._columns])

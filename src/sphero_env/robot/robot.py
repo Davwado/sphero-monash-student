@@ -475,9 +475,36 @@ class Robot(gym.Env):
             setpoint=self.current_setpoint,
             collision=collision_detected,
             step_count=self.step_count,
+            sensors=self._sensor_log_fields(info),
         )
 
         return obs, None, terminated, truncated, info
+
+    @staticmethod
+    def _sensor_log_fields(info):
+        """The measured values from info, keyed by the Visualiser's meas_* columns.
+
+        Only these reflect what the ball actually did - state_odom's heading and
+        speed are the last command read back from the API. Any sensor that isn't
+        streaming comes back None and is logged as NaN.
+        """
+        def pick(d, *keys):
+            if not isinstance(d, dict):
+                return None
+            for k in keys:
+                if d.get(k) is not None:
+                    return d[k]
+            return None
+
+        gyro = info.get("gyroscope")
+        return {
+            "meas_yaw_deg": pick(info.get("orientation"), "yaw"),
+            # The library documents gyro axes as pitch/roll/yaw; _sense_collision
+            # reads "z" first, so accept either.
+            "meas_gyro_yaw_dps": pick(gyro, "yaw", "z"),
+            "meas_vel_x_cms": pick(info.get("velocity"), "x"),
+            "meas_vel_y_cms": pick(info.get("velocity"), "y"),
+        }
     
     # ---- Interface compatibility methods ---- #
 

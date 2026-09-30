@@ -221,7 +221,9 @@ def coverage_report(transitions):
     COMMAND echoed back by api.get_heading(), not a measurement, so
     heading_cmd - heading is ~0 on every real row and all of them land in the
     0-10 deg bin whatever the ball did. The heading-error axis is only
-    meaningful for sim logs until measured yaw (info["orientation"]) is logged.
+    meaningful for sim logs. Newer robot logs also carry measured yaw in
+    meas_yaw_deg, but this report does not use it yet: its sign and offset
+    relative to `heading` still need checking on the robot.
     """
     if not transitions:
         print("\nNo transitions - nothing to report.")
