@@ -35,25 +35,7 @@ SIM_MAX_DECEL = 0.5
 
 VERBOSE = True
 DIVERGENCE_WARN = 0.25
-
-# Loosened from 0.02: a tight radius makes the ball spin in place at each
-# waypoint, because arctan2(dx, dy) gets very sensitive as dist shrinks.
-# Still well inside the corridor half-width (grid_resolution/2 = 6.25cm).
-#
-# Directional, not a plain circle: "within tolerance" only counts on the far
-# side of the waypoint along the direction it was approached from (a
-# semicircle, not a full disk) - so the ball has to actually pass through/
-# past the waypoint, not just graze near it from any angle (e.g. clip the
-# near edge while curving past without ever really arriving).
 WAYPOINT_TOLERANCE = 0.05
-
-# waypoint_reached() checks a single step's EKF estimate - the best estimate
-# we have, but still noisy enough (real measurement noise, both sim and
-# real) that one sample can flicker across the tolerance boundary and back.
-# Require the check to pass this many CONSECUTIVE steps before actually
-# advancing wp_index, instead of trusting a single noisy sample - this is
-# what actually fixes premature "reached" triggers, not switching to a
-# different position signal (est already is the best one we have).
 WAYPOINT_CONFIRM_STEPS = 3
 
 
@@ -320,7 +302,6 @@ def control_loop(control_env):
         print(f"  wp{i}: {wp}")
 
     steps = 0
-    WAYPOINT_TOLERANCE = 0.05
     MAX_STEPS_PER_WAYPOINT = int(60.0 / control_env.dt)
     MAX_REPLANS = 10
     replans = 0
