@@ -7,6 +7,7 @@ import argparse
 import csv
 import time
 import numpy as np
+import pygame
 
 from types import SimpleNamespace
 
@@ -19,7 +20,7 @@ import controller
 from contextlib import ExitStack, contextmanager
 
 LAB1_SEED = 0
-MAX_STEPS = 5000
+MAX_STEPS = 500000
 map = build_occupancy_grid()
 
 # Replace with your actual student ID before submitting.
@@ -35,10 +36,70 @@ SIM_MAX_DECEL = 0.5
 
 VERBOSE = True
 DIVERGENCE_WARN = 0.25
+WAYPOINT_TOLERANCE = 0.05
+WAYPOINT_CONFIRM_STEPS = 3
 
 
 def wrap_angle(angle):
     return (angle + np.pi) % (2.0 * np.pi) - np.pi
+
+
+def waypoint_reached(pos, wp, prev_wp, tolerance=WAYPOINT_TOLERANCE):
+    """True once `pos` is within `tolerance` of `wp` AND on the far side of
+    it relative to the direction of travel (prev_wp -> wp) - a semicircle
+    on the departure side, not a full circle. Falls back to a plain circle
+    when prev_wp is None (first waypoint of a (re)plan - no direction yet)
+    or prev_wp/wp coincide (degenerate direction)."""
+    pos = np.asarray(pos, dtype=float)[:2]
+    wp = np.asarray(wp, dtype=float)[:2]
+    to_pos = pos - wp
+    if np.dot(to_pos, to_pos) >= tolerance ** 2:
+        return False
+    if prev_wp is None:
+        return True
+    direction = wp - np.asarray(prev_wp, dtype=float)[:2]
+    dir_norm = np.linalg.norm(direction)
+    if dir_norm < 1e-9:
+        return True
+    return float(np.dot(to_pos, direction)) >= 0.0
+
+
+def _aim_point(waypoint, prev_waypoint, tolerance=WAYPOINT_TOLERANCE, overshoot_frac=0.5):
+    """Point to steer the controller toward for an INTERMEDIATE waypoint -
+    pushed past the true waypoint, along the same approach direction
+    waypoint_reached()'s semicircle uses, by overshoot_frac * tolerance
+    (0.5 = the middle of the zone). controller.py brakes based on distance
+    to whatever target it's given, with no notion of "this one's not the
+    real stop" - aiming at the true waypoint makes it decelerate as if
+    arriving for good at every intermediate stop. Aiming past it (but still
+    inside the reached-zone) means it's still driving, not braking, right
+    up to the point waypoint_reached() (which always checks the TRUE
+    waypoint + tolerance, unaffected by this) declares arrival and cuts
+    over to the next leg.
+
+    Falls back to the true waypoint when there's no direction to push along
+    (first waypoint of a plan) - use waypoint itself for the FINAL waypoint
+    (the real goal), where actually stopping is correct.
+    """
+    wp = np.asarray(waypoint, dtype=float)[:2]
+    if prev_waypoint is None:
+        return wp
+    direction = wp - np.asarray(prev_waypoint, dtype=float)[:2]
+    dir_norm = np.linalg.norm(direction)
+    if dir_norm < 1e-9:
+        return wp
+    return wp + (direction / dir_norm) * (tolerance * overshoot_frac)
+
+
+def _waypoint_zones(waypoints):
+    """Build the (wp_xy, dir_xy_or_None) list set_waypoint_zones() expects,
+    matching waypoint_reached()'s notion of direction (previous waypoint ->
+    this one; None for the first waypoint in the list)."""
+    zones = []
+    for i, wp in enumerate(waypoints):
+        d = None if i == 0 else np.asarray(wp, dtype=float)[:2] - np.asarray(waypoints[i - 1], dtype=float)[:2]
+        zones.append((wp, d))
+    return zones
 
 
 def dynamics(state, action):
@@ -86,18 +147,42 @@ def make_sim_env():
 
 
 def make_real_env(api):
-    return Robot(
+    env = Robot(
         api=api,
         dt=0.1,
-        max_steps=5000,
+        max_steps=500000,
         vel_limit=0.15,
-        world_width=5.0,
-        world_height=5.0,
+        # Visualiser scales its drawing to fit world_width x world_height
+        # into the window (see visualiser.py: scale = min(w/world_width,
+        # h/world_height)). The maze only spans ~1.1m, so the old 5.0x5.0
+        # here (left over from lab1/lab2's much bigger open-world layout)
+        # drew it tiny and centred in the window - looked like the ball
+        # started "in the middle" instead of at a corner of the maze.
+        # Matches make_sim_env()'s world size so both windows scale the same.
+        world_width=1.25,
+        world_height=1.25,
         goal_pos=(0.5, 0.5),
         goal_tolerance=0.1,
         render_mode="human",
         window_size=(800, 800),
     )
+
+
+def _fast_managed_api():
+    """Lazy import so the fast_comms path is only pulled in when --fast-comms
+    is actually passed - it lives alongside lab2, not lab3.
+
+    Unlike lab1/lab2, control_loop() below actually reads info["collision"]
+    (and obs[4]) to trigger the escape/replan logic when the ball hits a
+    maze wall - so unlike fast_comms' locator-only default, this needs
+    accelerometer/velocity/gyroscope streamed too, or Robot._sense_collision()
+    silently always reports no collision and the escape logic never fires.
+    """
+    import os
+    import sys
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "lab2", "fast_comms"))
+    from fast_link import fast_managed_api
+    return fast_managed_api(sensors=("locator", "accelerometer", "velocity", "gyroscope"))
 
 
 @contextmanager
@@ -151,6 +236,35 @@ def control_loop(control_env):
         m[0:2] += frame_offset
         return m
 
+    def render_shifted():
+        """Plain control_env.render() draws Robot's raw state_true/state_odom,
+        which are in the ROBOT's own odometry frame - not shifted into map
+        frame like everything else here (est, to_map(obs)). Without this,
+        the ball's on-screen position is offset from the maze overlay by
+        -frame_offset even though the EKF/planner are using the correct
+        (shifted) position internally. is_sim's frame_offset is zeros, so
+        this is a no-op there - safe to call unconditionally."""
+        control_env.vis.render(to_map(control_env.state_true), to_map(control_env.state_odom))
+
+    def fixup_traj_point():
+        """Robot.step()/SpheroEnv.step() call vis.record(gt_state=self.state_true,
+        odom_state=self.state_odom, ...) internally at the end of step() -
+        appending the RAW (unshifted) position to the trajectory line. That's
+        a separate code path from render_shifted() above (which only fixes
+        what's drawn for the CURRENT position), so without this the green/
+        blue trajectory LINE still traces through the wrong frame even
+        though the ball dot is drawn correctly - looks like the line starts
+        in the middle of the maze instead of at the start corner.
+
+        No public API to give record() a different point, so this corrects
+        the just-appended entry directly. Call right after every
+        control_env.step(...). No-op for sim (frame_offset is zeros)."""
+        vis = control_env.vis
+        if vis._gt_traj:
+            vis._gt_traj[-1] = tuple(to_map(control_env.state_true)[:2])
+        if vis._odom_traj:
+            vis._odom_traj[-1] = tuple(to_map(control_env.state_odom)[:2])
+
     rng = np.random.default_rng(LAB1_SEED)
 
     planner = Planner(map=map, dt=control_env.dt)
@@ -181,13 +295,14 @@ def control_loop(control_env):
     est = ekf.state_est.copy()
 
     waypoints = planner.plan(start_state, control_env.goal_pos, margin_cells=0)
+    control_env.vis.set_waypoints(waypoints)
+    control_env.vis.set_waypoint_zones(_waypoint_zones(waypoints), WAYPOINT_TOLERANCE)
 
     print(f"Planned {len(waypoints)} waypoints")
     for i, wp in enumerate(waypoints):
         print(f"  wp{i}: {wp}")
 
     steps = 0
-    WAYPOINT_TOLERANCE = 0.05
     MAX_STEPS_PER_WAYPOINT = int(60.0 / control_env.dt)
     MAX_REPLANS = 10
     replans = 0
@@ -210,17 +325,29 @@ def control_loop(control_env):
         wp_index = 0
         while wp_index < len(waypoints) and steps < MAX_STEPS:
             waypoint = waypoints[wp_index]
+            prev_waypoint = waypoints[wp_index - 1] if wp_index > 0 else None
             wp_steps = 0
+            wp_confirm_count = 0
             collided = False
 
-            wp_target = SimpleNamespace(goal_pos=waypoint, vel_limit=control_env.vel_limit)
+            # Steer at a point past the true waypoint for intermediate legs
+            # (see _aim_point()) so the controller doesn't brake as if
+            # arriving for good - only the FINAL waypoint (the real goal)
+            # gets the true position, where actually stopping is correct.
+            # waypoint_reached() below always checks the TRUE waypoint,
+            # regardless of what we're steering toward.
+            is_final_waypoint = wp_index == len(waypoints) - 1
+            aim_xy = waypoint if is_final_waypoint else _aim_point(waypoint, prev_waypoint)
+            wp_target = SimpleNamespace(goal_pos=aim_xy, vel_limit=control_env.vel_limit)
 
             while wp_steps < MAX_STEPS_PER_WAYPOINT and steps < MAX_STEPS:
                 action = controller.compute_action(wp_target, est, steps)
                 ekf.predict(action)
                 obs, _, terminated, truncated, info = control_env.step(action)
+                fixup_traj_point()
                 est = ekf.update(to_map(obs))[0]
-                control_env.render()
+                control_env.update_estimate(est, ekf.P)
+                render_shifted()
                 log_row()
 
                 raw = to_map(obs)
@@ -256,10 +383,13 @@ def control_loop(control_env):
                     reached_goal = True
                     break
 
-                dist_to_wp_sq = (est[0]-waypoint[0])**2 + (est[1]-waypoint[1])**2
-                if dist_to_wp_sq < WAYPOINT_TOLERANCE**2:
-                    print(f"Reached waypoint {wp_index}: {waypoint}")
-                    break
+                if waypoint_reached(est[:2], waypoint, prev_waypoint):
+                    wp_confirm_count += 1
+                    if wp_confirm_count >= WAYPOINT_CONFIRM_STEPS:
+                        print(f"Reached waypoint {wp_index}: {waypoint}")
+                        break
+                else:
+                    wp_confirm_count = 0
 
             if reached_goal:
                 print("Goal reached.")
@@ -278,8 +408,10 @@ def control_loop(control_env):
                     straight_back = np.array([-0.08, est[2]], dtype=np.float32)
                     ekf.predict(straight_back)
                     obs, _, terminated, truncated, info = control_env.step(straight_back)
+                    fixup_traj_point()
                     est = ekf.update(to_map(obs))[0]
-                    control_env.render()
+                    control_env.update_estimate(est, ekf.P)
+                    render_shifted()
                     log_row()
                     steps += 1
 
@@ -292,8 +424,10 @@ def control_loop(control_env):
                         hold = np.array([0.0, est[2]], dtype=np.float32)
                         ekf.predict(hold)
                         obs, _, terminated, truncated, info = control_env.step(hold)
+                        fixup_traj_point()
                         est = ekf.update(to_map(obs))[0]
-                        control_env.render()
+                        control_env.update_estimate(est, ekf.P)
+                        render_shifted()
                         log_row()
                         steps += 1
                     controller.reset()
@@ -301,6 +435,8 @@ def control_loop(control_env):
 
                 try:
                     waypoints = planner.plan(est, control_env.goal_pos, margin_cells=0)
+                    control_env.vis.set_waypoints(waypoints)
+                    control_env.vis.set_waypoint_zones(_waypoint_zones(waypoints), WAYPOINT_TOLERANCE)
                     wp_index = 0
                     controller.reset()
                     replans += 1
@@ -328,6 +464,18 @@ def control_loop(control_env):
                 f.write(f"{'sim' if is_sim else 'real'}: {timing}\n")
         csv_file.close()
         control_env.emergency_stop()
+
+    # Keep the window open (still showing the final trajectory/maze) until
+    # the user closes it or presses a key, instead of it vanishing the
+    # instant the run finishes.
+    print("Run finished - close the window or press any key to exit.")
+    waiting = True
+    while waiting:
+        for event in pygame.event.get():
+            if event.type in (pygame.QUIT, pygame.KEYDOWN):
+                waiting = False
+        render_shifted()
+        pygame.time.wait(50)
 
 
 def main(argv=None):

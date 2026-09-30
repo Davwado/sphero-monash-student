@@ -1,6 +1,7 @@
 import os
 import csv
 import math
+import time
 import numpy as np
 import pygame
 
@@ -32,8 +33,28 @@ class Visualiser:
             "setpoint_x", "setpoint_y",
             # Appended columns (keep at the end for backwards compatibility);
             # these make a saved CSV a complete replay file for lab1 --replay.
-            "gt_heading", "gt_speed", "collision", "step"
+            "gt_heading", "gt_speed", "collision", "step",
+            # Wall-clock seconds since start_logging(). Without this, a log
+            # records WHAT the ball did but not over how long, so slip (the
+            # ball moved less than commanded) and latency (less time passed
+            # than assumed) are indistinguishable - and dt is exactly what a
+            # fitted dynamics model needs. perf_counter is monotonic, so this
+            # stays sane if the system clock steps mid-run.
+            "t_wall",
+            # Raw sensor readings, real robot only (NaN in the simulator).
+            # The `heading` and `speed` columns above are NOT these: robot.py
+            # fills them from api.get_heading()/get_speed(), which return the
+            # last COMMAND ("target" angle/speed per the sphero_unsw docs).
+            # These are what the ball actually did. Logged raw, in the
+            # library's own units and conventions - the sign/offset of yaw
+            # relative to `heading`, and whether velocity is in the robot or
+            # world frame, have not been verified yet.
+            "meas_yaw_deg",        # api.get_orientation()["yaw"], -180..180
+            "meas_gyro_yaw_dps",   # api.get_gyroscope() yaw rate, deg/s
+            "meas_vel_x_cms",      # api.get_velocity()["x"], encoders, cm/s (+ right)
+            "meas_vel_y_cms",      # api.get_velocity()["y"], encoders, cm/s (+ forward)
         ]
+        self._t0 = None
         self._gt_traj = []
         self._odom_traj = []
         self._est_traj = []
@@ -42,6 +63,9 @@ class Visualiser:
         self._overlay_true_traj = None
         self.belief_mean = None
         self.belief_cov = None
+        self.waypoints = None  # list of (x, y) - see set_waypoints()
+        self.waypoint_zones = None      # list of (wp_xy, dir_xy_or_None) - see set_waypoint_zones()
+        self.waypoint_tolerance = 0.0
         self.visual_occupancy_grid = None
         self.distance_map = None
         self.screen = None
@@ -67,6 +91,7 @@ class Visualiser:
         self._writer = csv.writer(self._file)
         self._writer.writerow(self._columns)
         self._file.flush()
+        self._t0 = time.perf_counter()
 
     def stop_logging(self):
         if self._file is not None:
@@ -129,6 +154,35 @@ class Visualiser:
     def set_goal(self, goal_pos):
         self.goal_pos = np.array(goal_pos, dtype=np.float32)
 
+    def set_waypoints(self, waypoints):
+        """Planned path to draw as small markers + a thin connecting line,
+        e.g. from a Planner.plan() call. Pass None to clear."""
+        if waypoints is None:
+            self.waypoints = None
+            return
+        self.waypoints = [tuple(np.asarray(wp, dtype=np.float32)[:2]) for wp in waypoints]
+
+    def set_waypoint_zones(self, zones, radius):
+        """Draw the directional "reached" tolerance zone around each
+        waypoint: a semicircle on the far side of dir_xy (the direction of
+        travel into that waypoint), or a full circle when dir_xy is None
+        (e.g. the first waypoint of a plan, with no prior direction).
+
+        zones: list of (wp_xy, dir_xy_or_None). radius: tolerance in world
+        units (matches the logic that decides "reached"). Pass zones=None
+        to clear.
+        """
+        if zones is None:
+            self.waypoint_zones = None
+            return
+        cleaned = []
+        for wp, d in zones:
+            wp_arr = np.asarray(wp, dtype=np.float32)[:2]
+            d_arr = None if d is None else np.asarray(d, dtype=np.float32)[:2]
+            cleaned.append((wp_arr, d_arr))
+        self.waypoint_zones = cleaned
+        self.waypoint_tolerance = float(radius)
+
     def set_occupancy(self, grid, resolution, visual_grid=None):
         self.occupancy_grid = grid
         self.grid_resolution = resolution
@@ -152,7 +206,7 @@ class Visualiser:
         self._overlay_true_traj = _clean(true)
 
     def record(self, gt_state, odom_state, action, est_state=None, est_cov=None, setpoint=None,
-               collision=None, step_count=None):
+               collision=None, step_count=None, sensors=None):
         # Stash latest values for the HUD overlay
         self.hud_action = None if action is None else (float(action[0]), float(action[1]))
         if collision is not None:
@@ -210,6 +264,17 @@ class Visualiser:
         row["gt_speed"] = float(gt_state[3]) if gt_state is not None and len(gt_state) > 3 else np.nan
         row["collision"] = float(collision) if collision is not None else np.nan
         row["step"] = int(step_count) if step_count is not None else np.nan
+        # Timestamped at record() time, i.e. after the step has been applied,
+        # so consecutive diffs measure the real control period including
+        # comms latency.
+        row["t_wall"] = (time.perf_counter() - self._t0) if self._t0 is not None else np.nan
+        # Measured sensors (see _columns). Anything missing stays NaN.
+        for key, value in (sensors or {}).items():
+            if key in self._columns:
+                try:
+                    row[key] = float(value)
+                except (TypeError, ValueError):
+                    row[key] = np.nan
         # Write
         if self._writer is not None:
             self._writer.writerow([row.get(col, np.nan) for col in self._columns])
@@ -356,11 +421,44 @@ class Visualiser:
         gx, gy = self.goal_pos
         goal_px, goal_py = world_to_screen(gx, gy)
         pygame.draw.circle(self.screen, goal_color, (goal_px, goal_py), 7)
+        # Draw planned waypoints (e.g. from Planner.plan()) - thin connecting
+        # line plus a small marker per point, distinct from the goal/traj colors.
+        if self.waypoints:
+            waypoint_color = (0, 220, 220)
+            wp_pts = [world_to_screen(wx, wy) for wx, wy in self.waypoints]
+            if len(wp_pts) >= 2:
+                pygame.draw.lines(self.screen, waypoint_color, False, wp_pts, 1)
+            for px, py in wp_pts:
+                pygame.draw.circle(self.screen, waypoint_color, (px, py), 4, 1)
+        # Draw each waypoint's directional "reached" tolerance zone - a
+        # semicircle on the far side of the approach direction (full circle
+        # if no direction is known, e.g. the first waypoint of a plan).
+        if self.waypoint_zones and self.waypoint_tolerance > 0:
+            zone_color = (0, 220, 220)
+            r = self.waypoint_tolerance
+            for wp, d in self.waypoint_zones:
+                wx, wy = float(wp[0]), float(wp[1])
+                if d is not None and (abs(float(d[0])) > 1e-9 or abs(float(d[1])) > 1e-9):
+                    base_angle = math.atan2(float(d[1]), float(d[0]))
+                    angles = np.linspace(base_angle - math.pi / 2, base_angle + math.pi / 2, 16)
+                    closed = False
+                else:
+                    angles = np.linspace(0, 2 * math.pi, 24)
+                    closed = False
+                pts = [world_to_screen(wx + r * math.cos(a), wy + r * math.sin(a)) for a in angles]
+                if len(pts) >= 2:
+                    pygame.draw.lines(self.screen, zone_color, closed, pts, 1)
+                    if d is not None:
+                        # Close the "D" shape with the flat diameter edge.
+                        pygame.draw.line(self.screen, zone_color, pts[0], pts[-1], 1)
         # Draw trajectory overlays. If explicit overlays are not set, fall back to live trajectories.
         draw_polyline(self._overlay_real_traj, (255, 120, 120), width=2)
         draw_polyline(self._overlay_odom_traj if self._overlay_odom_traj is not None else self._odom_traj, (80, 180, 255), width=2)
         draw_polyline(self._overlay_true_traj if self._overlay_true_traj is not None else self._gt_traj, (120, 255, 120), width=2)
-        draw_polyline(self._est_traj, (255, 0, 255), width=2)
+        # Pink EKF-estimate trajectory line hidden - too cluttered alongside
+        # the true/odom/overlay lines. _est_traj is still populated in case
+        # it's needed for debugging later.
+        # draw_polyline(self._est_traj, (255, 0, 255), width=2)
         draw_last_point(self._overlay_real_traj, (255, 120, 120), radius=4)
         # True pose
         if gt_state is not None:

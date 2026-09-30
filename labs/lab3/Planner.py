@@ -1,6 +1,7 @@
 import numpy as np
 import heapq
 
+
 class Planner:
     def __init__(self, map, dt=0.1, resolution=0.125):
         """
@@ -130,9 +131,15 @@ class Planner:
         open_set = [(0, start_cell)]
         came_from = {}
         g_score = {start_cell: 0}
+        closed = set()
 
         while open_set:
             _, current = heapq.heappop(open_set)
+
+            if current in closed:
+                # Stale duplicate left over from a since-improved g_score.
+                continue
+            closed.add(current)
 
             if current == goal_cell:
                 path = [current]
@@ -142,14 +149,32 @@ class Planner:
                 return path[::-1]
 
             for neighbor in self._neighbors(map_to_use, current):
+                if neighbor in closed:
+                    continue
                 tentative_g = g_score[current] + 1
                 if tentative_g < g_score.get(neighbor, float('inf')):
                     came_from[neighbor] = current
                     g_score[neighbor] = tentative_g
-                    f = tentative_g + self._heuristic(neighbor, goal_cell)
-                    heapq.heappush(open_set, (f, neighbor))
+                    f_score = tentative_g + self._heuristic(neighbor, goal_cell)
+                    heapq.heappush(open_set, (f_score, neighbor))
 
         return None
+
+    def _thin(self, waypoints):
+        """Keep only points where direction changes."""
+        if len(waypoints) <= 2:
+            return waypoints
+        thinned = [waypoints[0]]
+        for i in range(1, len(waypoints) - 1):
+            prev_dir = waypoints[i] - waypoints[i - 1]
+            next_dir = waypoints[i + 1] - waypoints[i]
+            n1, n2 = np.linalg.norm(prev_dir), np.linalg.norm(next_dir)
+            if n1 < 1e-9 or n2 < 1e-9:
+                continue
+            if not np.allclose(prev_dir / n1, next_dir / n2, atol=1e-6):
+                thinned.append(waypoints[i])
+        thinned.append(waypoints[-1])
+        return thinned
 
     # ------------------------------------------------------------- public --
 
@@ -171,22 +196,14 @@ class Planner:
         """
         search_map = self.inflate_walls(margin_cells=margin_cells)
 
-        start_cell = self.world_to_occ((state[0], state[1]))
-        goal_cell = self.world_to_occ((goal[0], goal[1]))
+        start_cell = self.world_to_occ(state[:2])
+        goal_cell = self.world_to_occ(goal)
 
-        if search_map[start_cell] == 1:
-            snapped = self.find_nearest_free(start_cell)
-            if snapped is None:
-                raise ValueError(f"Start occ cell {start_cell} is a wall and no "
-                                  f"free cell found nearby")
-            start_cell = snapped
-
-        if search_map[goal_cell] == 1:
-            snapped = self.find_nearest_free(goal_cell)
-            if snapped is None:
-                raise ValueError(f"Goal occ cell {goal_cell} is a wall and no "
-                                  f"free cell found nearby")
-            goal_cell = snapped
+        start_cell = self.find_nearest_free(start_cell)
+        goal_cell = self.find_nearest_free(goal_cell)
+        if start_cell is None or goal_cell is None:
+            raise ValueError("Start or goal position is not near any free "
+                              "cell on the map.")
 
         path_cells = self._astar(search_map, start_cell, goal_cell)
         if path_cells is None:
