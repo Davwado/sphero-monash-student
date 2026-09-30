@@ -68,11 +68,13 @@ SETTLED_MOVE = 0.01
 # Speed loop. At a fixed low command the real ball either stalls for 5-13 steps or keeps
 # accelerating to ~7 cm/step, so the command is adjusted every step to hold TARGET_STEP of
 # movement per step, measured from odometry. Commands below MIN_DRIVE_SPEED don't roll it.
-TARGET_STEP = 0.02
+# Sim sweep: target 0.03-0.04 with MAX_CMD 0.018-0.022 all reach the goal cleanly
+# (24-32 s); from 0.05 up the runs turn fragile (collisions, or far slower).
+TARGET_STEP = 0.04
 SPEED_GAIN = 0.15
 START_CMD = 0.008
 MIN_DRIVE_SPEED = 0.007
-MAX_CMD = 0.015
+MAX_CMD = 0.020
 LOOKAHEAD = 0.10
 
 # Turn in place (Lab 3's rule): above TURN_THRESHOLD of heading error, stop and turn,
