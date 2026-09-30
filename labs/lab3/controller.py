@@ -26,8 +26,14 @@ KD = 0.45
 # Real motion must outrun the position noise or the controller steers on
 # nothing but noise. See module docstring.
 SPEED_CAP = 0.15
+# Matches lab3.py's WAYPOINT_TOLERANCE. Was 0.015 - tighter than the outer
+# loop's 0.05 switch-to-next-waypoint threshold, so the outer loop always
+# advanced wp_index before this ever triggered: the ball was still actively
+# driving (not yet in its own stop phase) at every intermediate waypoint,
+# never actually settling before the target switched. Keep these two in
+# sync - "reached" should mean the same thing in both places.
 
-GOAL_DIST_TOL = 0.015
+GOAL_DIST_TOL = 0.05
 BRAKE_GAIN = 3.0
 
 MAX_ACCEL_STEP = 0.008
