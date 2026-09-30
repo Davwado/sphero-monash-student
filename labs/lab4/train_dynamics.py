@@ -57,6 +57,7 @@ SPEED_DT = 2.95
 
 PIN_STEPS = 6
 PIN_DIST = 0.02
+REST_MOVE = 0.002
 
 
 def measured_speed(prev_xy, xy):
@@ -125,6 +126,10 @@ def make_learned_dynamics(weights_path, max_pos_step=0.1, z_clip=3.0):
 
     def learned(state, action):
         base = np.asarray(analytic_dynamics(state, action), dtype=float)
+        # A ball at rest and told to stay stopped stays put. The fit's bias term would
+        # otherwise have it creep forward forever.
+        if state[3] * SPEED_DT < REST_MOVE and action[0] <= 0.0:
+            return base.astype(np.float32)
         try:
             res = apply_ridge(features(state, action)[None, :], W, mu, sd, z_clip)[0]
         except Exception:

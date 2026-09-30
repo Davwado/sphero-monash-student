@@ -46,7 +46,7 @@ REAL_POS_NOISE = 0.01
 SEED = 0
 MAX_STEPS = 1500
 START_XY = np.array([-0.5, -0.5])
-WAYPOINT_TOLERANCE = 0.03
+WAYPOINT_TOLERANCE = 0.05
 MAX_STEPS_PER_WAYPOINT = 200
 MAX_REPLANS = 10
 
@@ -244,11 +244,13 @@ class Driver:
             self.turning, self.turn_target, self.cmd = True, desired, 0.0
             return np.array([0.0, desired])
 
-        if stop_dist is not None and coast_distance(est) >= stop_dist - COAST_MARGIN:
+        moving = est[3] * SPEED_DT
+        # Only brake a ball that is actually rolling: from rest there is nothing to coast.
+        if (stop_dist is not None and moving >= SETTLED_MOVE
+                and coast_distance(est) >= stop_dist - COAST_MARGIN):
             self.cmd = 0.0
             return np.array([0.0, desired])
 
-        moving = est[3] * SPEED_DT
         if self.cmd == 0.0:
             self.cmd = START_CMD if moving < TARGET_STEP else 0.0
         else:
