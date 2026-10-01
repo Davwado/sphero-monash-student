@@ -5,8 +5,10 @@ physics in --sim. The speed control is a loop on measured speed rather than Lab 
 Train first (from labs/lab4); every real run and speed test is logged to logs/:
     python train_dynamics.py logs/speed_test_*.csv logs/lab4_real_*.csv
 Then:
-    python lab4.py --sim
+    python lab4.py --sim                 # real time; SPACE pause, N step, UP/DOWN speed
+    python lab4.py --sim --speed 0.5     # half speed (--paused to start paused)
     python lab4.py
+The sim window stays open on a scrubbable replay when the run ends (see sim_viewer.py).
 """
 import argparse
 import csv
@@ -29,6 +31,7 @@ from sphero_env.envs.custom_maze_full import build_occupancy_grid  # noqa: E402
 from Planner import Planner  # noqa: E402
 from EKF import EKF, dynamics as analytic_dynamics, wrap_angle  # noqa: E402
 from train_dynamics import SPEED_DT, make_learned_dynamics, measured_speed  # noqa: E402
+from sim_viewer import SimViewer, StopRun  # noqa: E402
 
 # Replace with your actual student ID before submitting.
 STUDENT_ID = "your_id_here"
@@ -283,7 +286,7 @@ def corner_flags(waypoints):
     return flags
 
 
-def control_loop(env):
+def control_loop(env, viewer=None):
     env.reset(seed=SEED)
     is_sim = isinstance(env, SpheroEnv)
 
@@ -347,6 +350,8 @@ def control_loop(env):
             gap_steps = 0
 
         env.render()
+        if viewer is not None:
+            viewer.after_step()
         sim_xy = env.state_true[0:2] if is_sim else ("", "")
         writer.writerow([sim_xy[0], sim_xy[1], est[0], est[1]])
 
@@ -449,12 +454,24 @@ def main(argv=None):
     parser.add_argument("--sim", action="store_true", help="Run in the simulator")
     parser.add_argument("--analytic", action="store_true",
                         help="Use the Lab 3 analytic model instead of the learned one (for comparison)")
+    parser.add_argument("--speed", type=float, default=1.0,
+                        help="Sim playback speed (1 = real time, one step per STEP_PERIOD)")
+    parser.add_argument("--paused", action="store_true", help="Start the sim paused")
+    parser.add_argument("--no-replay", action="store_true",
+                        help="Close the sim window when the run ends instead of opening the replay")
     args = parser.parse_args(argv)
     if args.analytic:
         global model
         model = analytic_dynamics
     with managed_env(args.sim) as env:
-        control_loop(env)
+        # Sim only: pace steps for watching. Never on the real robot - it paces itself.
+        viewer = SimViewer(env, STEP_PERIOD, args.speed, args.paused) if args.sim else None
+        try:
+            control_loop(env, viewer)
+        except StopRun:
+            print("Run stopped from the sim window.")
+        if viewer is not None and not args.no_replay:
+            viewer.replay()
 
 
 if __name__ == "__main__":
