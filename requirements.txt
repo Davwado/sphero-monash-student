@@ -9,3 +9,4 @@ setuptools==81.0.0
 sphero-unsw==0.1.11
 pandas
 pytest
+stable-baselines3>=2.3.0

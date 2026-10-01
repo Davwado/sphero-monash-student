@@ -5,6 +5,10 @@ __pycache__/
 *.pt
 *.tfevents.*
 
+# Lab 4 RL training scratch (deployable weight.pth is NOT ignored)
+labs/lab4/rl_approach/checkpoints/
+logs/lab4_rl_tb/
+
 # C extensions
 *.so
 
