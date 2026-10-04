@@ -12,7 +12,9 @@ Then:
 
 The window is a session, like Lab 1: Bluetooth connects once, then R starts a run,
 P replays the last one, Q quits. Before every real run the ball must sit at START_XY
-facing +y; R then re-zeroes its aim, commanded heading and locator, and the run
+facing +y. A connected ball holds its heading, so aim it from the window (see Aimer):
+LEFT/RIGHT turn it in place, A frees it to be turned by hand. R then re-zeroes its
+aim, commanded heading and locator, and the run
 builds a fresh EKF, plan and speed loop, so nothing carries over between runs.
 Each real run gets its own log in logs/. --once does a single run and exits.
 """
@@ -33,6 +35,7 @@ sys.path.insert(0, os.path.join(HERE, "..", "lab3"))
 
 from sphero_env.robot.connect import scan_and_connect  # noqa: E402
 from sphero_unsw.sphero_edu import SpheroEduAPI  # noqa: E402
+from sphero_unsw.types import Color  # noqa: E402
 from sphero_unsw.utils import ToyUtil  # noqa: E402
 from sphero_env.robot.robot import Robot  # noqa: E402
 from sphero_env.envs import SpheroEnv  # noqa: E402
@@ -236,6 +239,56 @@ def reset_robot_frame(env):
     else:
         print(f"  Locator still reads {api.get_location()} cm - the frame offset covers it.")
     print("  Robot re-zeroed: aim, commanded heading and locator.")
+
+
+class Aimer:
+    """Aiming the real ball between runs. While connected it actively holds its heading,
+    so it can't simply be turned by hand. The tail light is on while idle: it shows the
+    BACK of the ball, so point it at -y (the ball drives away from it).
+
+        LEFT/RIGHT   turn in place 5 deg (SHIFT: 45 deg)
+        A            hand-aim: stabilization off so it can be turned by hand; A again locks
+    """
+
+    STEP_DEG, BIG_STEP_DEG = 5, 45
+
+    def __init__(self, env):
+        self.api = getattr(env, "api", None)
+        self.deg = 0
+        self.hand = False
+
+    def tail_light(self, on):
+        try:
+            self.api.set_back_led(Color(0, 0, 255) if on else Color(0, 0, 0))
+        except Exception:
+            pass
+
+    def turn(self, delta_deg):
+        if self.hand:
+            return
+        self.deg = (self.deg + delta_deg) % 360
+        self.api.set_heading(self.deg)      # at speed 0 it turns in place
+
+    def toggle_hand(self):
+        if self.hand:
+            self.lock()
+        else:
+            self.hand = True
+            self.api.set_stabilization(False)
+            print("Hand-aim: stabilization off - turn the ball by hand, then A (or R).")
+
+    def lock(self):
+        """Before a run: take whatever way the ball faces now as the aim."""
+        if self.hand:
+            # Classic Sphero aim: zero the heading while it's free, then stabilize, so it
+            # holds the hand-set direction instead of swinging back to the old one.
+            self.api.reset_aim()
+            self.api.set_stabilization(True)
+            time.sleep(0.5)
+            self.hand = False
+            print("Hand-aim locked.")
+        self.deg = 0
+        self.tail_light(False)
 
 
 def keepalive(env, state={"t": 0.0}):
@@ -571,8 +624,11 @@ def run_session(env, args):
             viewer.replay()
         return
 
-    place = "" if is_sim else "Ball at start, facing +y\n"
+    aimer = None if is_sim else Aimer(env)
+    place = "" if is_sim else "Start square, tail light to -y\nLEFT/RIGHT turn (SHIFT 45)  A hand-aim\n"
     idle = f"{place}R run  P replay  Q quit"
+    if aimer is not None:
+        aimer.tail_light(True)
     print("Ready. In the window: R = run, P = replay last run, Q = quit."
           + ("" if is_sim else " Put the ball at the start facing +y before each R."))
     run_idx = 0
@@ -588,9 +644,18 @@ def run_session(env, args):
                     continue
                 if event.key in (pygame.K_q, pygame.K_ESCAPE):
                     return
+                if aimer is not None and event.key in (pygame.K_LEFT, pygame.K_RIGHT):
+                    step = Aimer.BIG_STEP_DEG if event.mod & pygame.KMOD_SHIFT else Aimer.STEP_DEG
+                    aimer.turn(step if event.key == pygame.K_RIGHT else -step)
+                if aimer is not None and event.key == pygame.K_a:
+                    aimer.toggle_hand()
                 if event.key == pygame.K_r:
                     run_idx += 1
+                    if aimer is not None:
+                        aimer.lock()
                     run_once(env, viewer, args.sim_delay, run_idx)
+                    if aimer is not None:
+                        aimer.tail_light(True)
                 if event.key == pygame.K_p and viewer.replay() == "quit":
                     return
             keepalive(env)
