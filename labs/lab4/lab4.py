@@ -1,6 +1,7 @@
 """Lab 4: the Lab 3 A* planner and EKF, with a learned residual dynamics model used for
-the EKF's predict step, for braking (predicted coast distance), and as the simulator's
-physics in --sim. The speed control is a loop on measured speed rather than Lab 3's PD.
+the EKF's predict step and as the simulator's physics in --sim. The speed control is a
+loop on measured speed rather than Lab 3's PD, and braking uses a command-delay model
+fitted to the real runs (see CMD_DELAY_STEPS).
 
 Train first (from labs/lab4); every real run and speed test is logged to logs/:
     python train_dynamics.py logs/speed_test_*.csv logs/lab4_real_*.csv
@@ -15,6 +16,7 @@ import csv
 import os
 import sys
 import time
+from collections import deque
 from contextlib import ExitStack, contextmanager
 
 import numpy as np
@@ -68,16 +70,29 @@ STUCK_DIST = 0.03
 CORNER_ANGLE = np.radians(30)
 SETTLED_MOVE = 0.01
 
-# Speed loop. At a fixed low command the real ball either stalls for 5-13 steps or keeps
-# accelerating to ~7 cm/step, so the command is adjusted every step to hold TARGET_STEP of
-# movement per step, measured from odometry. Commands below MIN_DRIVE_SPEED don't roll it.
-# Sim sweep: target 0.03-0.04 with MAX_CMD 0.018-0.022 all reach the goal cleanly
-# (24-32 s); from 0.05 up the runs turn fragile (collisions, or far slower).
-TARGET_STEP = 0.04
-SPEED_GAIN = 0.15
-START_CMD = 0.008
+# How the real ball responds to a speed command, fitted to the 13 real lab4 runs
+# (30 Sep + 5 Oct) by replaying their logged commands: it ignores a new command for
+# CMD_DELAY_STEPS steps, then closes MOTOR_ALPHA of the gap to CMD_GAIN * command per
+# step (0.016 -> 4 cm/step), and under zero command loses COAST_DECAY of its speed per
+# step. Two commands are always in flight, so a ball told to stop at 4 cm/step still
+# rolls ~12 cm. The learned model can't see that (it has no command history) and
+# predicts ~2.5 cm, which is why braking on it overshot stop points into walls.
+CMD_DELAY_STEPS = 2
+MOTOR_ALPHA = 0.35
+CMD_GAIN = 2.5
+COAST_DECAY = 0.5
+
+# Speed loop: adjust the command every step to hold TARGET_STEP of movement per step,
+# measured from odometry. Commands below MIN_DRIVE_SPEED don't roll it.
+# START_CMD = MAX_CMD starts at a steady cruise (~3.5 cm/step) instead of creeping up and
+# then surging: with 0.6 s of delay the loop only reacts to stale motion, so it is kept
+# gentle and in practice only trims the speed down. Tuned on the fitted delay model:
+# stop-point error ~2 cm mean (was ~10 cm) at the same travel time.
+TARGET_STEP = 0.035
+SPEED_GAIN = 0.06
+START_CMD = 0.014
 MIN_DRIVE_SPEED = 0.007
-MAX_CMD = 0.020
+MAX_CMD = 0.014
 LOOKAHEAD = 0.10
 
 # Turn in place (Lab 3's rule): above TURN_THRESHOLD of heading error, stop and turn,
@@ -215,15 +230,16 @@ def lookahead_point(pos, a, b):
     return b if s >= length else a + u * s
 
 
-def coast_distance(est):
-    """How far the model predicts the ball rolls if told to stop now."""
-    state = np.asarray(est, dtype=float)
-    action = np.array([0.0, state[2]])
-    total = 0.0
-    for _ in range(COAST_HORIZON):
-        nxt = np.asarray(model(state, action), dtype=float)
-        total += float(np.hypot(*(nxt[:2] - state[:2])))
-        state = nxt
+def coast_distance(moving, sent):
+    """How far the ball still rolls if every command from now on is zero: the last
+    CMD_DELAY_STEPS commands sent are already on their way to the motor, then it coasts.
+    `moving` is the last measured movement per step, `sent` the recent speed commands."""
+    pending = list(sent)[-CMD_DELAY_STEPS:]
+    speed, total = moving, 0.0
+    for k in range(COAST_HORIZON):
+        drive = CMD_GAIN * pending[k] if k < len(pending) else 0.0
+        speed = speed * COAST_DECAY if drive == 0.0 else speed + MOTOR_ALPHA * (drive - speed)
+        total += speed
     return total
 
 
@@ -231,7 +247,13 @@ class Driver:
     """Heading from the aim point; speed from a loop on measured movement per step."""
 
     def __init__(self):
+        # Speed commands actually sent, newest last. Not cleared by reset(): commands
+        # already sent keep arriving at the motor whatever the plan does next.
+        self.sent = deque([0.0] * CMD_DELAY_STEPS, maxlen=CMD_DELAY_STEPS)
         self.reset()
+
+    def record(self, speed_sent):
+        self.sent.append(float(speed_sent))
 
     def reset(self):
         self.cmd = 0.0
@@ -250,9 +272,10 @@ class Driver:
             return np.array([0.0, desired])
 
         moving = est[3] * SPEED_DT
-        # Only brake a ball that is actually rolling: from rest there is nothing to coast.
-        if (stop_dist is not None and moving >= SETTLED_MOVE
-                and coast_distance(est) >= stop_dist - COAST_MARGIN):
+        # Brake a ball that is rolling or has drive in flight; from rest with nothing
+        # pending there is nothing to coast.
+        if (stop_dist is not None and (moving >= SETTLED_MOVE or any(self.sent))
+                and coast_distance(moving, self.sent) >= stop_dist - COAST_MARGIN):
             self.cmd = 0.0
             return np.array([0.0, desired])
 
@@ -286,7 +309,7 @@ def corner_flags(waypoints):
     return flags
 
 
-def control_loop(env, viewer=None):
+def control_loop(env, viewer=None, delay_steps=CMD_DELAY_STEPS):
     env.reset(seed=SEED)
     is_sim = isinstance(env, SpheroEnv)
 
@@ -309,6 +332,7 @@ def control_loop(env, viewer=None):
     waypoints = planner.plan(est, env.goal_pos, margin_cells=0)
     corners = corner_flags(waypoints)
     driver = Driver()
+    sim_delay = deque([0.0] * delay_steps) if is_sim and delay_steps else None
     print(f"Planned {len(waypoints)} waypoints")
 
     os.makedirs(LOG_DIR, exist_ok=True)
@@ -328,8 +352,15 @@ def control_loop(env, viewer=None):
                 time.sleep(wait)
             last_step_time = time.time()
 
+        driver.record(action[0])
         ekf.predict(action)
-        obs, _, _, _, info = env.step(action)
+        if sim_delay is not None:
+            # The real ball acts on the speed command from CMD_DELAY_STEPS steps ago.
+            sim_delay.append(float(action[0]))
+            plant_action = np.array([sim_delay.popleft(), action[1]], dtype=np.float32)
+        else:
+            plant_action = action
+        obs, _, _, _, info = env.step(plant_action)
 
         raw = np.asarray(obs, dtype=float)[:4].copy()
         raw[0:2] += frame_offset
@@ -457,6 +488,9 @@ def main(argv=None):
     parser.add_argument("--speed", type=float, default=1.0,
                         help="Sim playback speed (1 = real time, one step per STEP_PERIOD)")
     parser.add_argument("--paused", action="store_true", help="Start the sim paused")
+    parser.add_argument("--sim-delay", type=int, default=CMD_DELAY_STEPS,
+                        help="Steps the sim holds back each speed command, like the real ball "
+                             "(0 = the old instant response)")
     parser.add_argument("--no-replay", action="store_true",
                         help="Close the sim window when the run ends instead of opening the replay")
     args = parser.parse_args(argv)
@@ -467,7 +501,7 @@ def main(argv=None):
         # Sim only: pace steps for watching. Never on the real robot - it paces itself.
         viewer = SimViewer(env, STEP_PERIOD, args.speed, args.paused) if args.sim else None
         try:
-            control_loop(env, viewer)
+            control_loop(env, viewer, args.sim_delay)
         except StopRun:
             print("Run stopped from the sim window.")
         if viewer is not None and not args.no_replay:
