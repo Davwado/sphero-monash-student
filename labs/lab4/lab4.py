@@ -12,9 +12,9 @@ Then:
 
 The window is a session, like Lab 1: Bluetooth connects once, then R starts a run,
 P replays the last one, Q quits. Before every real run the ball must sit at START_XY
-facing +y. A connected ball holds its heading, so aim it from the window (see Aimer):
-LEFT/RIGHT turn it in place, A frees it to be turned by hand. R then re-zeroes its
-aim, commanded heading and locator, and the run
+facing +y. A connected ball holds its heading and can't be turned by hand, so aim it
+from the window with LEFT/RIGHT (see Aimer). R then re-zeroes its aim, commanded
+heading and locator, and the run
 builds a fresh EKF, plan and speed loop, so nothing carries over between runs.
 Each real run gets its own log in logs/. --once does a single run and exits.
 """
@@ -242,20 +242,20 @@ def reset_robot_frame(env):
 
 
 class Aimer:
-    """Aiming the real ball between runs. While connected it actively holds its heading,
-    so it can't simply be turned by hand. The tail light is on while idle: it shows the
+    """Aiming the real ball between runs. While connected it actively holds its heading
+    and can't be turned by hand: on the BOLT+ none of stabilization off (either
+    processor) or raw motors off frees it, tested 5 Oct. A heading command does turn it,
+    so it is aimed by turning it in place. The tail light is on while idle: it shows the
     BACK of the ball, so point it at -y (the ball drives away from it).
 
-        LEFT/RIGHT   turn in place 5 deg (SHIFT: 45 deg)
-        A            hand-aim: stabilization off so it can be turned by hand; A again locks
+        LEFT/RIGHT   turn in place 5 deg (SHIFT: 45 deg, CTRL: 1 deg), hold to repeat
     """
 
-    STEP_DEG, BIG_STEP_DEG = 5, 45
+    STEP_DEG, BIG_STEP_DEG, FINE_STEP_DEG = 5, 45, 1
 
     def __init__(self, env):
-        self.api = getattr(env, "api", None)
+        self.api = env.api
         self.deg = 0
-        self.hand = False
 
     def tail_light(self, on):
         try:
@@ -263,30 +263,14 @@ class Aimer:
         except Exception:
             pass
 
-    def turn(self, delta_deg):
-        if self.hand:
-            return
-        self.deg = (self.deg + delta_deg) % 360
+    def turn(self, key, mod):
+        step = (self.BIG_STEP_DEG if mod & pygame.KMOD_SHIFT else
+                self.FINE_STEP_DEG if mod & pygame.KMOD_CTRL else self.STEP_DEG)
+        self.deg = (self.deg + (step if key == pygame.K_RIGHT else -step)) % 360
         self.api.set_heading(self.deg)      # at speed 0 it turns in place
 
-    def toggle_hand(self):
-        if self.hand:
-            self.lock()
-        else:
-            self.hand = True
-            self.api.set_stabilization(False)
-            print("Hand-aim: stabilization off - turn the ball by hand, then A (or R).")
-
     def lock(self):
-        """Before a run: take whatever way the ball faces now as the aim."""
-        if self.hand:
-            # Classic Sphero aim: zero the heading while it's free, then stabilize, so it
-            # holds the hand-set direction instead of swinging back to the old one.
-            self.api.reset_aim()
-            self.api.set_stabilization(True)
-            time.sleep(0.5)
-            self.hand = False
-            print("Hand-aim locked.")
+        """Before a run: reset_robot_frame() takes the way it faces now as the aim."""
         self.deg = 0
         self.tail_light(False)
 
@@ -625,7 +609,7 @@ def run_session(env, args):
         return
 
     aimer = None if is_sim else Aimer(env)
-    place = "" if is_sim else "Start square, tail light to -y\nLEFT/RIGHT turn (SHIFT 45)  A hand-aim\n"
+    place = "" if is_sim else "Start square, tail light to -y\nLEFT/RIGHT aim (SHIFT 45, CTRL 1)\n"
     idle = f"{place}R run  P replay  Q quit"
     if aimer is not None:
         aimer.tail_light(True)
@@ -637,6 +621,8 @@ def run_session(env, args):
         try:
             env.vis.set_hud(status=idle)
             env.render()
+            if aimer is not None:
+                pygame.key.set_repeat(350, 120)     # hold an arrow to keep turning (replay resets it)
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
                     return
@@ -645,10 +631,7 @@ def run_session(env, args):
                 if event.key in (pygame.K_q, pygame.K_ESCAPE):
                     return
                 if aimer is not None and event.key in (pygame.K_LEFT, pygame.K_RIGHT):
-                    step = Aimer.BIG_STEP_DEG if event.mod & pygame.KMOD_SHIFT else Aimer.STEP_DEG
-                    aimer.turn(step if event.key == pygame.K_RIGHT else -step)
-                if aimer is not None and event.key == pygame.K_a:
-                    aimer.toggle_hand()
+                    aimer.turn(event.key, event.mod)
                 if event.key == pygame.K_r:
                     run_idx += 1
                     if aimer is not None:
