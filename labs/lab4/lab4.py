@@ -128,11 +128,14 @@ def make_sim_env():
 
 
 def make_real_env(api):
-    return Robot(
+    env = Robot(
         api=api,
         dt=0.1,
         max_steps=MAX_STEPS,
         vel_limit=0.15,
+        # Keep 5.0: Robot also clips the observation to +-world/2 in the robot's own
+        # odometry frame (origin at the start), and the route runs out to ~1 m from it.
+        # At 1.25 a ball past 0.625 m would be reported as sitting at 0.625.
         world_width=5.0,
         world_height=5.0,
         goal_pos=(0.5, 0.5),
@@ -144,6 +147,10 @@ def make_real_env(api):
         render_mode="human",
         window_size=(800, 800),
     )
+    # Size only the DRAWING to the maze (same 1.25 m as the sim window) and show the walls.
+    env.vis.world_width = env.vis.world_height = 1.25
+    env.vis.set_occupancy(occupancy, 0.125)
+    return env
 
 
 @contextmanager
@@ -305,9 +312,40 @@ def control_loop(env, viewer=None):
     prev_raw_xy = START_XY.copy()
     last_step_time = 0.0
 
+    def to_map(state):
+        m = np.asarray(state, dtype=float)[:4].copy()
+        m[0:2] += frame_offset
+        return m
+
+    def render_shifted():
+        # env.render() draws the raw odometry-frame state, which on the real robot is offset
+        # from the maze by frame_offset. No-op in sim (offset is zero).
+        env.vis.render(to_map(env.state_true), to_map(env.state_odom))
+
+    def fix_trajectory_point():
+        # step() appends the RAW position to the trajectory lines; shift that last point.
+        vis = env.vis
+        if vis._gt_traj:
+            vis._gt_traj[-1] = tuple(to_map(env.state_true)[:2])
+        if vis._odom_traj:
+            vis._odom_traj[-1] = tuple(to_map(env.state_odom)[:2])
+
+    def show_plan():
+        """Draw the route and each waypoint's 'reached' zone. This matches the stop logic
+        below: a stop point (the first waypoint, corners, the goal) is a full circle - it
+        counts once the ball is inside it and settled; a pass-through waypoint is a half disc
+        past the waypoint, because it also counts once the ball is beyond it along the
+        segment."""
+        env.vis.set_waypoints(waypoints)
+        zones = [(wp, None if i == 0 or corners[i]
+                  else np.asarray(wp, dtype=float) - np.asarray(waypoints[i - 1], dtype=float))
+                 for i, wp in enumerate(waypoints)]
+        env.vis.set_waypoint_zones(zones, WAYPOINT_TOLERANCE)
+
     planner = Planner(map=occupancy, dt=env.dt)
     waypoints = planner.plan(est, env.goal_pos, margin_cells=0)
     corners = corner_flags(waypoints)
+    show_plan()
     driver = Driver()
     print(f"Planned {len(waypoints)} waypoints")
 
@@ -330,6 +368,7 @@ def control_loop(env, viewer=None):
 
         ekf.predict(action)
         obs, _, _, _, info = env.step(action)
+        fix_trajectory_point()
 
         raw = np.asarray(obs, dtype=float)[:4].copy()
         raw[0:2] += frame_offset
@@ -349,7 +388,7 @@ def control_loop(env, viewer=None):
             est = raw.copy()
             gap_steps = 0
 
-        env.render()
+        render_shifted()
         if viewer is not None:
             viewer.after_step()
         sim_xy = env.state_true[0:2] if is_sim else ("", "")
@@ -421,6 +460,7 @@ def control_loop(env, viewer=None):
                 try:
                     waypoints = planner.plan(est, env.goal_pos, margin_cells=0)
                     corners = corner_flags(waypoints)
+                    show_plan()
                     wp_index = 0
                     replans += 1
                     driver.reset()

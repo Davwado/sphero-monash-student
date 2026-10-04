@@ -36,3 +36,4 @@ sim: 81 steps, 0.319 s per step on average
 sim: 81 steps, 0.318 s per step on average
 sim: 11 steps, 0.390 s per step on average
 sim: 81 steps, 0.319 s per step on average
+sim: 81 steps, 0.317 s per step on average
