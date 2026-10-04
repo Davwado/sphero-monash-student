@@ -10,7 +10,7 @@ MAX_ACCEL = 0.003    # accelerating toward the target speed
 MAX_DECEL = 0.01        # braking toward the target speed
 
 
-def dynamics(state, action):
+def dynamics(state, action, dt=2.95):
         """
         Unicycle model: heading and speed both move toward their commanded
         targets at a limited rate (this is what gives the ball momentum),
@@ -19,10 +19,16 @@ def dynamics(state, action):
 
         action: [speed_cmd, heading_cmd]
         state:  [x, y, heading, speed]
+        dt:     seconds this call advances the state by. Default 2.95 was
+                the real per-step time when this was calibrated (see
+                logs/lab1_real_latest.csv), back when the control loop was
+                bottlenecked on blocking SpheroEduAPI calls. predict() below
+                always passes self.dt explicitly now - this default only
+                matters for a caller that invokes dynamics() directly
+                without going through EKF.predict().
         """
         x, y, heading, speed = state
         speed_cmd, heading_cmd = action
-        dt = 2.95  # real per-step time, calibrated against logs/lab1_real_latest.csv
 
         # Compute new heading and speed ratelimited towards the commanded targets
         heading_error = wrap_angle(heading_cmd - heading)
@@ -133,7 +139,7 @@ class EKF:
                 self.dynamics_fn(self.state_est, action), dtype=float)
         else:
             J = self.jacobian(action)
-            self.state_est = np.asarray(dynamics(self.state_est, action), dtype=float)
+            self.state_est = np.asarray(dynamics(self.state_est, action, dt=self.dt), dtype=float)
 
         self.P = J @ self.P @ J.T + self.Q
 

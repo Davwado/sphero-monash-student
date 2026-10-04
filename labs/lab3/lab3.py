@@ -36,7 +36,13 @@ SIM_MAX_DECEL = 0.5
 
 VERBOSE = True
 DIVERGENCE_WARN = 0.25
-WAYPOINT_TOLERANCE = 0.05
+
+# Single source of truth for both tolerances, used across this file, the
+# visualiser and controller.py (which reads WAYPOINT_TOLERANCE off the
+# wp_target namespace each call - see waypoint_reached()/control_loop()
+# below - instead of keeping its own separate copy of the value).
+WAYPOINT_TOLERANCE = 0.05   # per-waypoint "reached" radius
+GOAL_TOLERANCE = 0.05        # final-goal "reached" radius
 WAYPOINT_CONFIRM_STEPS = 3
 
 
@@ -44,16 +50,29 @@ def wrap_angle(angle):
     return (angle + np.pi) % (2.0 * np.pi) - np.pi
 
 
-def waypoint_reached(pos, wp, prev_wp, tolerance=WAYPOINT_TOLERANCE):
+def waypoint_reached(pos, wp, prev_wp, tolerance=WAYPOINT_TOLERANCE, require_radius=True):
     """True once `pos` is within `tolerance` of `wp` AND on the far side of
     it relative to the direction of travel (prev_wp -> wp) - a semicircle
     on the departure side, not a full circle. Falls back to a plain circle
     when prev_wp is None (first waypoint of a (re)plan - no direction yet)
-    or prev_wp/wp coincide (degenerate direction)."""
+    or prev_wp/wp coincide (degenerate direction).
+
+    require_radius=False drops the distance check and keeps only the
+    far-side-of-the-plane test. Used for in-line waypoints (see
+    _is_in_line()): those get steered at the NEXT waypoint, not this one, so
+    the ball can cross the small tolerance circle in 1-2 steps at cruising
+    speed - too fast for WAYPOINT_CONFIRM_STEPS to accumulate before it's
+    already past the circle, which left the run stalled on a "reached"
+    check that could never fire until the per-waypoint timeout forced it.
+    The plane crossing alone is reliable here because motion past an
+    in-line waypoint is monotonic (still heading the same direction, one
+    corridor width wide) - there's no risk of a stray crossing far off to
+    the side the way a full circle-drop would risk near a real turn.
+    """
     pos = np.asarray(pos, dtype=float)[:2]
     wp = np.asarray(wp, dtype=float)[:2]
     to_pos = pos - wp
-    if np.dot(to_pos, to_pos) >= tolerance ** 2:
+    if require_radius and np.dot(to_pos, to_pos) >= tolerance ** 2:
         return False
     if prev_wp is None:
         return True
@@ -89,6 +108,28 @@ def _aim_point(waypoint, prev_waypoint, tolerance=WAYPOINT_TOLERANCE, overshoot_
     if dir_norm < 1e-9:
         return wp
     return wp + (direction / dir_norm) * (tolerance * overshoot_frac)
+
+
+def _is_in_line(waypoints, i, cos_threshold=0.999):
+    """True if waypoint i sits on a straight run - the direction arriving at
+    it (waypoints[i-1] -> waypoints[i]) matches the direction leaving it
+    (waypoints[i] -> waypoints[i+1]). False for the first/last waypoint of a
+    plan (no direction on one side) or a genuine turn/dead-end reversal.
+
+    The planner deliberately keeps every plate centre rather than thinning
+    to turn-points (see Planner.plan()'s docstring), so most intermediate
+    waypoints along a corridor are exactly this case - there's no reason to
+    brake for one, only for an actual turn or the final goal.
+    """
+    if i <= 0 or i >= len(waypoints) - 1:
+        return False
+    incoming = np.asarray(waypoints[i], dtype=float)[:2] - np.asarray(waypoints[i - 1], dtype=float)[:2]
+    outgoing = np.asarray(waypoints[i + 1], dtype=float)[:2] - np.asarray(waypoints[i], dtype=float)[:2]
+    in_norm = np.linalg.norm(incoming)
+    out_norm = np.linalg.norm(outgoing)
+    if in_norm < 1e-9 or out_norm < 1e-9:
+        return False
+    return float(np.dot(incoming / in_norm, outgoing / out_norm)) > cos_threshold
 
 
 def _waypoint_zones(waypoints):
@@ -133,7 +174,7 @@ def make_sim_env():
         world_width=1.25,
         world_height=1.25,
         goal_pos=(0.5, 0.5),
-        goal_tolerance=0.1,
+        goal_tolerance=GOAL_TOLERANCE,
         occupancy_grid=map,
         grid_resolution=0.125,
         dynamics=dynamics,
@@ -162,10 +203,12 @@ def make_real_env(api):
         world_width=1.25,
         world_height=1.25,
         goal_pos=(0.5, 0.5),
-        goal_tolerance=0.1,
+        goal_tolerance=GOAL_TOLERANCE,
         render_mode="human",
         window_size=(800, 800),
     )
+    env.vis.set_occupancy(map, 0.125)
+    return env
 
 
 def _fast_managed_api():
@@ -186,7 +229,7 @@ def _fast_managed_api():
 
 
 @contextmanager
-def managed_env(sim: bool):
+def managed_env(sim: bool, fast_comms: bool = False):
     if sim:
         sim_env = make_sim_env()
         sim_env.set_log_path("logs/lab3_sim.csv")
@@ -196,6 +239,19 @@ def managed_env(sim: bool):
         finally:
             sim_env.stop_logging()
             sim_env.close()
+    elif fast_comms:
+        # See labs/lab2/fast_comms/fast_link.py - drives through a low-latency
+        # BLE path instead of SpheroEduAPI, but presents the same interface
+        # Robot expects from `api`, so make_real_env() below is unchanged.
+        with _fast_managed_api() as api:
+            real_env = make_real_env(api)
+            real_env.set_log_path("logs/lab3_real.csv")
+            real_env.start_logging()
+            try:
+                yield real_env
+            finally:
+                real_env.stop_logging()
+                real_env.close()
     else:
         with ExitStack() as stack:
             selected_toy, _ = scan_and_connect()
@@ -294,6 +350,33 @@ def control_loop(control_env):
     ekf.P = np.eye(4) * 1e-3
     est = ekf.state_est.copy()
 
+    _last_predict_t = [time.time()]
+
+    def timed_predict(action):
+        """ekf.predict(), but on real hardware ekf.dt is set to the ACTUALLY
+        measured wall-clock time since the previous call first.
+
+        EKF.py's dynamics() used to hardcode dt=2.95s (calibrated against
+        the old, much slower blocking SpheroEduAPI loop) regardless of
+        self.dt - so the filter always predicted as if 2.95s had elapsed
+        every step, no matter how fast the real loop actually ran. After
+        this session's comms speedups that's wildly wrong (predicting
+        15-20x more travel than actually happened), which drove `est` far
+        ahead of the real position almost immediately, then got the
+        estimate permanently stuck once the gap exceeded EKF.update()'s
+        outlier-rejection gate (a real run's log showed exactly this:
+        est frozen ~44cm from odometry, P growing unbounded). Measuring the
+        real per-step time removes the need to guess a fixed constant here
+        that would just go stale again the next time the loop gets faster.
+        No-op for sim - ekf.dt stays SIM_DT, matching the fixed-step sim
+        clock rather than wall-clock time.
+        """
+        if not is_sim:
+            now = time.time()
+            ekf.dt = max(now - _last_predict_t[0], 1e-3)
+            _last_predict_t[0] = now
+        ekf.predict(action)
+
     waypoints = planner.plan(start_state, control_env.goal_pos, margin_cells=0)
     control_env.vis.set_waypoints(waypoints)
     control_env.vis.set_waypoint_zones(_waypoint_zones(waypoints), WAYPOINT_TOLERANCE)
@@ -330,19 +413,44 @@ def control_loop(control_env):
             wp_confirm_count = 0
             collided = False
 
-            # Steer at a point past the true waypoint for intermediate legs
-            # (see _aim_point()) so the controller doesn't brake as if
-            # arriving for good - only the FINAL waypoint (the real goal)
-            # gets the true position, where actually stopping is correct.
-            # waypoint_reached() below always checks the TRUE waypoint,
-            # regardless of what we're steering toward.
+            # Three cases for where to steer, and whether this leg should
+            # ever brake to a stop. waypoint_reached() below always checks
+            # the TRUE waypoint for advancing wp_index, regardless of what
+            # we're steering toward.
             is_final_waypoint = wp_index == len(waypoints) - 1
-            aim_xy = waypoint if is_final_waypoint else _aim_point(waypoint, prev_waypoint)
-            wp_target = SimpleNamespace(goal_pos=aim_xy, vel_limit=control_env.vel_limit)
+            in_line = (not is_final_waypoint) and _is_in_line(waypoints, wp_index)
+
+            if is_final_waypoint:
+                # The real goal - steer at it directly, and it's the one
+                # place we actually want to come to rest.
+                aim_xy = waypoint
+            elif in_line:
+                # Straight run (see _is_in_line()) - aim past this waypoint
+                # at the NEXT one instead of slowing for it. That keeps the
+                # steering target ~0.25m away the whole time (not the ~2.5cm
+                # _aim_point() overshoot used for turns below), so the PD
+                # law never approaches zero speed while cruising through a
+                # corridor - only controller.py's commit phase kicks in,
+                # and only once genuinely close to a real turn or the goal.
+                aim_xy = waypoints[wp_index + 1]
+            else:
+                # A genuine turn - steer a little past it (see _aim_point())
+                # so the controller doesn't brake as if arriving for good.
+                aim_xy = _aim_point(waypoint, prev_waypoint)
+
+            wp_target = SimpleNamespace(goal_pos=aim_xy, vel_limit=control_env.vel_limit,
+                                         goal_tolerance=WAYPOINT_TOLERANCE,
+                                         allow_stop=is_final_waypoint or not in_line)
 
             while wp_steps < MAX_STEPS_PER_WAYPOINT and steps < MAX_STEPS:
+                was_turning = controller.turning
                 action = controller.compute_action(wp_target, est, steps)
-                ekf.predict(action)
+                if controller.turning and not was_turning:
+                    # Mark where the ball was when the controller committed to
+                    # a turn-in-place, using est (its input) - the position it
+                    # was actually deciding from, not where it ends up after.
+                    control_env.vis.add_turn_point(est[:2])
+                timed_predict(action)
                 obs, _, terminated, truncated, info = control_env.step(action)
                 fixup_traj_point()
                 est = ekf.update(to_map(obs))[0]
@@ -383,7 +491,7 @@ def control_loop(control_env):
                     reached_goal = True
                     break
 
-                if waypoint_reached(est[:2], waypoint, prev_waypoint):
+                if waypoint_reached(est[:2], waypoint, prev_waypoint, require_radius=not in_line):
                     wp_confirm_count += 1
                     if wp_confirm_count >= WAYPOINT_CONFIRM_STEPS:
                         print(f"Reached waypoint {wp_index}: {waypoint}")
@@ -406,7 +514,7 @@ def control_loop(control_env):
 
                 for _ in range(8):
                     straight_back = np.array([-0.08, est[2]], dtype=np.float32)
-                    ekf.predict(straight_back)
+                    timed_predict(straight_back)
                     obs, _, terminated, truncated, info = control_env.step(straight_back)
                     fixup_traj_point()
                     est = ekf.update(to_map(obs))[0]
@@ -422,7 +530,7 @@ def control_loop(control_env):
                           f"waiting rather than skipping")
                     for _ in range(20):
                         hold = np.array([0.0, est[2]], dtype=np.float32)
-                        ekf.predict(hold)
+                        timed_predict(hold)
                         obs, _, terminated, truncated, info = control_env.step(hold)
                         fixup_traj_point()
                         est = ekf.update(to_map(obs))[0]
@@ -481,9 +589,12 @@ def control_loop(control_env):
 def main(argv=None):
     parser = argparse.ArgumentParser()
     parser.add_argument("--sim", action="store_true", help="Run simulation")
+    parser.add_argument("--fast-comms", action="store_true",
+                        help="Real robot only: drive through labs/lab2/fast_comms' low-latency "
+                             "BLE path instead of SpheroEduAPI (see fast_link.py)")
     args = parser.parse_args(argv)
 
-    with managed_env(args.sim) as control_env:
+    with managed_env(args.sim, fast_comms=args.fast_comms) as control_env:
         control_loop(control_env)
 
 

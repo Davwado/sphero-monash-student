@@ -66,6 +66,7 @@ class Visualiser:
         self.waypoints = None  # list of (x, y) - see set_waypoints()
         self.waypoint_zones = None      # list of (wp_xy, dir_xy_or_None) - see set_waypoint_zones()
         self.waypoint_tolerance = 0.0
+        self.turn_points = []   # (x, y) marks where the controller entered turn-in-place
         self.visual_occupancy_grid = None
         self.distance_map = None
         self.screen = None
@@ -112,6 +113,12 @@ class Visualiser:
         self.hud_action = None
         self.hud_collision = 0.0
         self.hud_step = 0
+        self.turn_points.clear()
+
+    def add_turn_point(self, pos_xy):
+        """Record a world-frame (x, y) where the controller decided to enter
+        turn-in-place, so render() can mark it on the map."""
+        self.turn_points.append((float(pos_xy[0]), float(pos_xy[1])))
 
     def set_hud(self, run=None, status=None):
         """Update session-level HUD fields (run counter, status line)."""
@@ -451,13 +458,20 @@ class Visualiser:
                     if d is not None:
                         # Close the "D" shape with the flat diameter edge.
                         pygame.draw.line(self.screen, zone_color, pts[0], pts[-1], 1)
+        # Mark every position where the controller entered turn-in-place -
+        # an X so it reads distinctly from the round waypoint/goal markers.
+        if self.turn_points:
+            turn_color = (255, 80, 220)
+            for wx, wy in self.turn_points:
+                px, py = world_to_screen(wx, wy)
+                pygame.draw.line(self.screen, turn_color, (px - 5, py - 5), (px + 5, py + 5), 2)
+                pygame.draw.line(self.screen, turn_color, (px - 5, py + 5), (px + 5, py - 5), 2)
         # Draw trajectory overlays. If explicit overlays are not set, fall back to live trajectories.
         draw_polyline(self._overlay_real_traj, (255, 120, 120), width=2)
         draw_polyline(self._overlay_odom_traj if self._overlay_odom_traj is not None else self._odom_traj, (80, 180, 255), width=2)
         draw_polyline(self._overlay_true_traj if self._overlay_true_traj is not None else self._gt_traj, (120, 255, 120), width=2)
-        # Pink EKF-estimate trajectory line hidden - too cluttered alongside
-        # the true/odom/overlay lines. _est_traj is still populated in case
-        # it's needed for debugging later.
+        # Magenta EKF-estimate trajectory line hidden. _est_traj is still
+        # populated in case it's needed for debugging later.
         # draw_polyline(self._est_traj, (255, 0, 255), width=2)
         draw_last_point(self._overlay_real_traj, (255, 120, 120), radius=4)
         # True pose
@@ -508,6 +522,7 @@ class Visualiser:
             "Blue: odometry",
             "Magenta: estimate",
             "Orange: commanded",
+            "Pink X: turn decided",
         ]
         for idx, text in enumerate(legend_lines):
             surf = font.render(text, True, (220, 220, 220))
