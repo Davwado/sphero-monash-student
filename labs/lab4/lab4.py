@@ -9,23 +9,31 @@ Then:
     python lab4.py --sim                 # real time; SPACE pause, N step, UP/DOWN speed
     python lab4.py --sim --speed 0.5     # half speed (--paused to start paused)
     python lab4.py
-The sim window stays open on a scrubbable replay when the run ends (see sim_viewer.py).
+
+The window is a session, like Lab 1: Bluetooth connects once, then R starts a run,
+P replays the last one, Q quits. Before every real run the ball must sit at START_XY
+facing +y; R then re-zeroes its aim, commanded heading and locator, and the run
+builds a fresh EKF, plan and speed loop, so nothing carries over between runs.
+Each real run gets its own log in logs/. --once does a single run and exits.
 """
 import argparse
 import csv
 import os
 import sys
 import time
+import traceback
 from collections import deque
 from contextlib import ExitStack, contextmanager
 
 import numpy as np
+import pygame
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "..", "lab3"))
 
 from sphero_env.robot.connect import scan_and_connect  # noqa: E402
 from sphero_unsw.sphero_edu import SpheroEduAPI  # noqa: E402
+from sphero_unsw.utils import ToyUtil  # noqa: E402
 from sphero_env.robot.robot import Robot  # noqa: E402
 from sphero_env.envs import SpheroEnv  # noqa: E402
 from sphero_env.envs.custom_maze_full import build_occupancy_grid  # noqa: E402
@@ -163,10 +171,10 @@ def make_real_env(api):
 
 @contextmanager
 def managed_env(sim: bool):
+    """The env for the whole session. On the real robot the Bluetooth link opens
+    once here and stays open across runs."""
     if sim:
         env = make_sim_env()
-        env.set_log_path(os.path.join(LOG_DIR, "lab4_sim.csv"))
-        env.start_logging()
         try:
             yield env
         finally:
@@ -179,15 +187,67 @@ def managed_env(sim: bool):
             api = stack.enter_context(SpheroEduAPI(toy))
             api.reset_aim()
             env = make_real_env(api)
-            # One file per run, so every real run can be kept as training data.
-            kind = "learned" if model is learned_dynamics else "analytic"
-            env.set_log_path(os.path.join(LOG_DIR, f"lab4_real_{kind}_{time.strftime('%Y%m%d-%H%M%S')}.csv"))
-            env.start_logging()
+            env.toy = toy   # for reset_robot_frame() and keepalive()
             try:
                 yield env
             finally:
                 env.close()
                 env.stop_logging()
+
+
+def start_run_log(env, is_sim):
+    """One file per real run, so every run can be kept as training data."""
+    if is_sim:
+        path = os.path.join(LOG_DIR, "lab4_sim.csv")
+    else:
+        kind = "learned" if model is learned_dynamics else "analytic"
+        path = os.path.join(LOG_DIR, f"lab4_real_{kind}_{time.strftime('%Y%m%d-%H%M%S')}.csv")
+    os.makedirs(LOG_DIR, exist_ok=True)
+    env.stop_logging()
+    env.set_log_path(path)
+    env.start_logging()
+
+
+def reset_robot_frame(env):
+    """Real robot, before every run: make the ball's current pose the new origin so
+    nothing from the last run carries over. The ball must already sit at START_XY
+    facing +y.
+
+    - aim: whatever way the ball faces now becomes heading 0
+    - commanded heading: Robot reads its heading back from the last command, which
+      would otherwise start this run at the previous run's final heading
+    - locator: back to (0, 0), clearing the previous run's position drift
+    """
+    api = env.api
+    # Aim first: stop_roll(0) before it would turn the ball to the OLD frame's 0 deg.
+    api.reset_aim()
+    api.stop_roll(0)
+    try:
+        ToyUtil.reset_locator(env.toy)
+    except Exception as e:
+        print(f"  Locator reset failed ({e}) - the run's frame offset still covers it.")
+    # The locator streams every ~150 ms; wait for a reading from after the reset.
+    deadline = time.time() + 1.5
+    while time.time() < deadline:
+        loc = api.get_location() or {}
+        if abs(loc.get("x", 99)) < 1.0 and abs(loc.get("y", 99)) < 1.0:
+            break
+        time.sleep(0.05)
+    else:
+        print(f"  Locator still reads {api.get_location()} cm - the frame offset covers it.")
+    print("  Robot re-zeroed: aim, commanded heading and locator.")
+
+
+def keepalive(env, state={"t": 0.0}):
+    """Ping the toy every ~3 s while idle so the Bluetooth link stays up."""
+    toy = getattr(env, "toy", None)
+    if toy is None or time.time() - state["t"] < 3.0:
+        return
+    state["t"] = time.time()
+    try:
+        ToyUtil.ping(toy)
+    except Exception:
+        traceback.print_exc()
 
 
 def make_ekf(is_sim):
@@ -480,6 +540,66 @@ def control_loop(env, viewer=None, delay_steps=CMD_DELAY_STEPS):
         env.emergency_stop()
 
 
+def run_once(env, viewer, sim_delay, run_idx):
+    """One run from a clean slate. Everything the run builds (EKF, plan, speed loop,
+    frame offset, sim delay queue, CSVs) is created inside control_loop()."""
+    is_sim = isinstance(env, SpheroEnv)
+    print(f"\n=== Run {run_idx} ===")
+    if not is_sim:
+        reset_robot_frame(env)
+    start_run_log(env, is_sim)
+    viewer.new_run()
+    env.vis.set_hud(run=run_idx)
+    try:
+        control_loop(env, viewer, sim_delay)
+    except StopRun:
+        print("Run stopped from the window.")
+    except KeyboardInterrupt:
+        print("Run interrupted (Ctrl+C) - robot stopped.")
+    finally:
+        env.stop_logging()
+
+
+def run_session(env, args):
+    """Idle loop: the window (and Bluetooth link) stays open between runs."""
+    is_sim = isinstance(env, SpheroEnv)
+    viewer = SimViewer(env, STEP_PERIOD, args.speed, args.paused, pace=is_sim,
+                       on_idle=lambda: keepalive(env))
+    if args.once:
+        run_once(env, viewer, args.sim_delay, 1)
+        if is_sim and not args.no_replay:
+            viewer.replay()
+        return
+
+    place = "" if is_sim else "Ball at start, facing +y\n"
+    idle = f"{place}R run  P replay  Q quit"
+    print("Ready. In the window: R = run, P = replay last run, Q = quit."
+          + ("" if is_sim else " Put the ball at the start facing +y before each R."))
+    run_idx = 0
+    env.render()
+    while True:
+        try:
+            env.vis.set_hud(status=idle)
+            env.render()
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
+                    return
+                if viewer.handle_common(event) or event.type != pygame.KEYDOWN:
+                    continue
+                if event.key in (pygame.K_q, pygame.K_ESCAPE):
+                    return
+                if event.key == pygame.K_r:
+                    run_idx += 1
+                    run_once(env, viewer, args.sim_delay, run_idx)
+                if event.key == pygame.K_p and viewer.replay() == "quit":
+                    return
+            keepalive(env)
+            time.sleep(0.05)
+        except KeyboardInterrupt:
+            env.emergency_stop()
+            print("Ctrl+C: robot stopped. Press Q in the window to quit.")
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser()
     parser.add_argument("--sim", action="store_true", help="Run in the simulator")
@@ -491,21 +611,16 @@ def main(argv=None):
     parser.add_argument("--sim-delay", type=int, default=CMD_DELAY_STEPS,
                         help="Steps the sim holds back each speed command, like the real ball "
                              "(0 = the old instant response)")
+    parser.add_argument("--once", action="store_true",
+                        help="Do a single run and exit instead of the R/P/Q session")
     parser.add_argument("--no-replay", action="store_true",
-                        help="Close the sim window when the run ends instead of opening the replay")
+                        help="With --once: exit when the run ends instead of opening the replay")
     args = parser.parse_args(argv)
     if args.analytic:
         global model
         model = analytic_dynamics
     with managed_env(args.sim) as env:
-        # Sim only: pace steps for watching. Never on the real robot - it paces itself.
-        viewer = SimViewer(env, STEP_PERIOD, args.speed, args.paused) if args.sim else None
-        try:
-            control_loop(env, viewer, args.sim_delay)
-        except StopRun:
-            print("Run stopped from the sim window.")
-        if viewer is not None and not args.no_replay:
-            viewer.replay()
+        run_session(env, args)
 
 
 if __name__ == "__main__":

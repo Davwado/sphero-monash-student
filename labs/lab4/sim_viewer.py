@@ -1,14 +1,16 @@
-"""Playback controls for the Lab 4 simulator window.
+"""Run controls and replay for the Lab 4 window.
 
-The sim has no hardware to wait on, so it runs as fast as pygame draws. This
-paces each step to the control period (STEP_PERIOD) at an adjustable playback
-speed, without touching dt or the physics. After the run, the window stays open
-on a scrubbable replay of the whole run.
+The sim has no hardware to wait on, so it runs as fast as pygame draws. With
+pace=True this paces each step to the control period (STEP_PERIOD) at an
+adjustable playback speed, without touching dt or the physics. On the real robot
+(pace=False) it never blocks - the robot paces itself - and only listens for a stop
+key. Either way every step is recorded for a scrubbable replay.
 
-Live:    SPACE pause/play   RIGHT/N single step (paused)   UP/DOWN speed x2 / /2
+Sim:     SPACE pause/play   RIGHT/N single step (paused)   UP/DOWN speed x2 / /2
          0 reset to 1x   +/- HUD text size   Q/ESC stop the run
+Real:    SPACE/ESC/Q stop the run (the robot is stopped)
 Replay:  LEFT/RIGHT step (hold to scroll)   wheel/drag bar to scrub   HOME/END jump
-         SPACE play/pause   UP/DOWN speed   Q/ESC close
+         SPACE play/pause   UP/DOWN speed   Q/ESC back
 """
 import time
 
@@ -16,7 +18,8 @@ import pygame
 
 SPEEDS = [0.125, 0.25, 0.5, 1.0, 2.0, 4.0, 8.0, 16.0]
 LIVE_HELP = "SPC pause  N step  UP/DN speed"
-REPLAY_HELP = "UP/DN speed  Q close"
+REAL_HELP = "SPC/ESC stop"
+REPLAY_HELP = "UP/DN speed  ESC back"
 
 
 class StopRun(Exception):
@@ -24,12 +27,19 @@ class StopRun(Exception):
 
 
 class SimViewer:
-    def __init__(self, env, period, speed=1.0, start_paused=False):
+    def __init__(self, env, period, speed=1.0, start_paused=False, pace=True, on_idle=None):
         self.env = env
         self.vis = env.vis
         self.period = period
         self.speed_idx = min(range(len(SPEEDS)), key=lambda i: abs(SPEEDS[i] - speed))
-        self.paused = start_paused
+        self.start_paused = start_paused
+        self.pace = pace
+        self.on_idle = on_idle      # called while the replay sits open (e.g. BLE keepalive)
+        self.new_run()
+
+    def new_run(self):
+        """Forget the previous run's frames and timing."""
+        self.paused = self.start_paused if self.pace else False
         self.frames = []
         self._last = None
 
@@ -40,9 +50,20 @@ class SimViewer:
     # ------------------------------------------------------------------ live
 
     def after_step(self):
-        """Call once per sim step, after env.render(). Snapshots the frame for
-        replay, then blocks until it is time for the next step."""
+        """Call once per step, after env.render(). Snapshots the frame for replay,
+        then (sim) blocks until it is time for the next step, or (real) just checks
+        for a stop key. Raises StopRun to end the run."""
         self._snapshot()
+        if not self.pace:
+            self.vis.set_hud(status=f"REAL RUN  step {len(self.frames)}\n{REAL_HELP}")
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
+                    raise StopRun
+                if self.handle_common(event) or event.type != pygame.KEYDOWN:
+                    continue
+                if event.key in (pygame.K_q, pygame.K_ESCAPE, pygame.K_SPACE):
+                    raise StopRun
+            return
         due = (self._last or time.perf_counter()) + self.period / self.speed
         step_once = False
         while True:
@@ -50,7 +71,7 @@ class SimViewer:
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
                     raise StopRun
-                if self._common(event) or event.type != pygame.KEYDOWN:
+                if self.handle_common(event) or event.type != pygame.KEYDOWN:
                     continue
                 if event.key in (pygame.K_q, pygame.K_ESCAPE):
                     raise StopRun
@@ -84,14 +105,16 @@ class SimViewer:
         })
 
     def replay(self):
-        """Scrub through the finished run like a video until the window is closed."""
+        """Scrub through the last run like a video. Returns "quit" if the window was
+        closed, otherwise "idle" (ESC/Q pressed)."""
         frames, v = self.frames, self.vis
         if not frames or v.screen is None:
-            return
+            print("No run to replay yet.")
+            return "idle"
         gt, odom, est = list(v._gt_traj), list(v._odom_traj), list(v._est_traj)
         n, i = len(frames), len(frames) - 1
         playing, scrubbing, last_advance = False, False, 0.0
-        print("Run finished - replay open: LEFT/RIGHT step, drag the bar, SPACE play, UP/DOWN speed, Q close")
+        print("Replay: LEFT/RIGHT step, drag the bar, SPACE play, UP/DOWN speed, ESC back")
         pygame.key.set_repeat(300, 40)
 
         def seek(mx):
@@ -111,13 +134,13 @@ class SimViewer:
 
                 for event in pygame.event.get():
                     if event.type == pygame.QUIT:
-                        return
-                    if self._common(event):
+                        return "quit"
+                    if self.handle_common(event):
                         continue
                     if event.type == pygame.KEYDOWN:
                         k = event.key
                         if k in (pygame.K_q, pygame.K_ESCAPE):
-                            return
+                            return "idle"
                         if k == pygame.K_RIGHT:
                             i, playing = min(n - 1, i + 1), False
                         if k == pygame.K_LEFT:
@@ -146,14 +169,16 @@ class SimViewer:
                         i += 1
                     else:
                         playing = False
+                if self.on_idle is not None:
+                    self.on_idle()
         except KeyboardInterrupt:
-            return
+            return "idle"
         finally:
             pygame.key.set_repeat()
 
     # ---------------------------------------------------------------- shared
 
-    def _common(self, event):
+    def handle_common(self, event):
         """Resize, HUD text size and playback speed - same in live and replay."""
         if event.type == pygame.VIDEORESIZE:
             self.vis.handle_resize(event.w, event.h)
