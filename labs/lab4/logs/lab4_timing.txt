@@ -34,3 +34,6 @@ real: 127 steps, 0.309 s per step on average
 real: 112 steps, 0.308 s per step on average
 real: 8 steps, 0.315 s per step on average
 real: 33 steps, 0.308 s per step on average
+real: 125 steps, 0.301 s per step on average
+real: 212 steps, 0.312 s per step on average
+real: 104 steps, 0.299 s per step on average
