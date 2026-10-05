@@ -120,6 +120,24 @@ COAST_HORIZON = 10
 # ball's centre; in open corridor it is just the motor stalling at low speed.
 WALL_CHECK = 0.07
 
+# Wall correction. The ball's centre can't get closer to a wall than its radius, so an
+# estimate inside that band is wrong - usually odometry that kept counting while the
+# ball slipped against a wall (5 Oct: a corner overshoot into the top wall left the
+# estimate ~2.5 cm high, and the last leg then drifted into a side opening). Each step
+# the estimate is pulled back into free space and the odometry re-anchored with it.
+# WALL_LIMIT is the furthest the centre can sit from its cell centre towards a closed
+# side, or across an open connection: half a 0.25 m plate, minus the ball radius
+# (BOLT+: 73 mm) and half the wall thickness (~1 cm walls assumed - measure if unsure).
+# The sim has 0.125 m thick walls and a point robot, so its limit is a quarter plate.
+BALL_RADIUS = 0.0365
+WALL_HALF_THICKNESS = 0.005
+WALL_LIMIT_REAL = 0.125 - BALL_RADIUS - WALL_HALF_THICKNESS
+WALL_LIMIT_SIM = 0.0625
+WALL_DEADBAND = 0.01        # ~ position noise: ignore smaller violations
+MAX_WALL_CORRECTION = 0.05  # bigger means the estimate is lost in another way: leave it
+CELL = 0.25
+WALL_CORRECTION = True
+
 VERBOSE = True
 
 occupancy = build_occupancy_grid()
@@ -386,6 +404,38 @@ class Driver:
         return np.array([self.cmd, desired])
 
 
+def free_rectangles(planner, pos, limit):
+    """Free space around pos as axis-aligned boxes (xmin, xmax, ymin, ymax): its cell's
+    square, plus a corridor of the same width to each neighbour it opens onto."""
+    c = np.round(np.asarray(pos, dtype=float) / CELL) * CELL
+    boxes = [(c[0] - limit, c[0] + limit, c[1] - limit, c[1] + limit)]
+    for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+        if not occupancy[planner.world_to_occ(c + 0.5 * CELL * np.array([dx, dy]))]:
+            n = c + CELL * np.array([dx, dy])
+            lo, hi = np.minimum(c, n), np.maximum(c, n)
+            if dx:
+                boxes.append((lo[0], hi[0], c[1] - limit, c[1] + limit))
+            else:
+                boxes.append((c[0] - limit, c[0] + limit, lo[1], hi[1]))
+    return boxes
+
+
+def wall_correction(planner, pos, limit):
+    """Shift that moves pos to the nearest point the ball's centre can physically be at,
+    less WALL_DEADBAND; None if it's already there (or the fix would be implausibly big)."""
+    pos = np.asarray(pos, dtype=float)
+    best = None
+    for x0, x1, y0, y1 in free_rectangles(planner, pos, limit):
+        proj = np.array([np.clip(pos[0], x0, x1), np.clip(pos[1], y0, y1)])
+        if best is None or np.hypot(*(proj - pos)) < np.hypot(*(best - pos)):
+            best = proj
+    shift = best - pos
+    dist = float(np.hypot(*shift))
+    if dist <= WALL_DEADBAND or dist > MAX_WALL_CORRECTION:
+        return None
+    return shift * (dist - WALL_DEADBAND) / dist
+
+
 def near_wall(planner, pos):
     for a in np.linspace(0, 2 * np.pi, 8, endpoint=False):
         row, col = planner.world_to_occ(pos + WALL_CHECK * np.array([np.sin(a), np.cos(a)]))
@@ -426,6 +476,7 @@ def control_loop(env, viewer=None, delay_steps=CMD_DELAY_STEPS):
     last_step_time = 0.0
 
     planner = Planner(map=occupancy, dt=env.dt)
+    wall_limit = (WALL_LIMIT_SIM if is_sim else WALL_LIMIT_REAL) if WALL_CORRECTION else None
     waypoints = planner.plan(est, env.goal_pos, margin_cells=0)
     corners = corner_flags(waypoints)
     driver = Driver()
@@ -440,7 +491,7 @@ def control_loop(env, viewer=None, delay_steps=CMD_DELAY_STEPS):
 
     def step(action):
         """Pace, act, then filter. Returns (collided, raw measurement, action sent)."""
-        nonlocal est, prev_raw_xy, last_step_time, learned_active, gap_steps
+        nonlocal est, prev_raw_xy, last_step_time, learned_active, gap_steps, frame_offset
         action = safe_action(action, est[2], env.vel_limit)
 
         if not is_sim:
@@ -465,6 +516,18 @@ def control_loop(env, viewer=None, delay_steps=CMD_DELAY_STEPS):
         prev_raw_xy = raw[:2].copy()
 
         est = ekf.update(raw)[0].copy()
+
+        shift = wall_correction(planner, est[:2], wall_limit) if wall_limit else None
+        if shift is not None:
+            # The ball can't be inside a wall: move the estimate out, and the odometry
+            # frame with it so the next measurements agree instead of pulling it back.
+            est[:2] += shift
+            ekf.state_est[:2] = est[:2]
+            frame_offset = frame_offset + shift
+            prev_raw_xy = prev_raw_xy + shift
+            raw[0:2] += shift
+            if VERBOSE:
+                print(f"  wall correction ({shift[0] * 100:+.1f}, {shift[1] * 100:+.1f}) cm")
 
         gap_steps = gap_steps + 1 if np.hypot(*(est[:2] - raw[:2])) > MAX_EST_GAP else 0
         if gap_steps >= MAX_GAP_STEPS:
