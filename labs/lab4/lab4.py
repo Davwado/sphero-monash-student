@@ -143,11 +143,17 @@ COAST_HORIZON = 10
 # can't hide a stall (normal driving covers ~20 cm in NUDGE_AFTER steps).
 NUDGE_AFTER = 6
 STALL_DIST = 0.02       # m moved over the last NUDGE_AFTER driven steps: below this it's stuck
-FREED_DIST = 0.015      # m moved forward since it got stuck: it's over - back to normal driving
+FREED_DIST = 0.015      # m moved since it got stuck: it's free - back to normal driving
 NUDGE_START = 0.020
 NUDGE_STEP = 0.006
 NUDGE_MAX = 0.050
 NUDGE_WAIT = 4
+# A ball pinned with its side against a wall won't come free by pushing straight ahead
+# (11:35 run: 134 steps stuck like that). Pushes cycle through these headings relative
+# to the way it wants to go, and count as freed on movement in any direction. If even
+# NUDGE_MAX doesn't free it, it's treated as pinned: collision -> replan, which first
+# backs it off to the cell centre.
+NUDGE_ANGLES = np.radians([0, 30, -30])
 
 # Only count "driven forward but not moving" as stuck when a wall is this close to the
 # ball's centre; in open corridor it is just the motor stalling at low speed.
@@ -449,8 +455,8 @@ class Driver:
         pos = np.asarray(pos, dtype=float)[:2].copy()
         if self.nudge is not None:
             self.recent.append(pos)
-            forward = (np.mean(self.recent, axis=0) - self.nudge_ref) @ self.nudge_dir
-            if len(self.recent) == self.recent.maxlen and forward >= FREED_DIST:
+            moved = float(np.hypot(*(np.mean(self.recent, axis=0) - self.nudge_ref)))
+            if len(self.recent) == self.recent.maxlen and moved >= FREED_DIST:
                 print(f"  Over the bump with a {self.nudge * 1000:.0f} push")
                 self.nudge_from = max(NUDGE_START, self.nudge - NUDGE_STEP)
                 self.nudge, self.cmd = None, 0.0
@@ -473,6 +479,7 @@ class Driver:
         self.turn_target = 0.0
         self.driven = deque(maxlen=NUDGE_AFTER + 1)   # positions over consecutive driven steps
         self.nudge = None       # current push size while nudging, else None
+        self.pinned = False     # set when nudging gives up; the control loop replans
         self.nudge_step = 0
 
     def creep(self, est, target, settled):
@@ -497,23 +504,26 @@ class Driver:
         return np.array([cmd, desired])
 
     def _nudge(self, desired):
-        """One short push, then NUDGE_WAIT steps of nothing; a bit harder each round."""
+        """One short push, then NUDGE_WAIT steps of nothing. Each round turns the push to
+        the next of NUDGE_ANGLES and makes it a little harder."""
         if self.nudge is None:
-            self.nudge, self.nudge_step = self.nudge_from, 0
+            self.nudge, self.nudge_step, self.nudge_round = self.nudge_from, 0, 0
             self.nudge_ref = np.mean(self.driven, axis=0)   # where it's stuck (averaged)
-            self.nudge_dir = np.array([np.sin(desired), np.cos(desired)])
             self.recent = deque(maxlen=3)
             print(f"  Stuck {NUDGE_AFTER} steps - nudging from {self.nudge * 1000:.0f}")
+        heading = wrap_angle(desired + NUDGE_ANGLES[self.nudge_round % len(NUDGE_ANGLES)])
         cmd = self.nudge if self.nudge_step == 0 else 0.0
         self.nudge_step += 1
         if self.nudge_step > NUDGE_WAIT:
-            if self.nudge >= NUDGE_MAX:
-                print("  Nudges didn't free it - back to normal driving")
-                self.nudge = None
+            if self.nudge >= NUDGE_MAX and self.nudge_round % len(NUDGE_ANGLES) == len(NUDGE_ANGLES) - 1:
+                print("  Nudges didn't free it - treating it as pinned")
+                self.nudge, self.pinned = None, True
                 self.driven.clear()
             else:
-                self.nudge, self.nudge_step = min(self.nudge + NUDGE_STEP, NUDGE_MAX), 0
-        return np.array([cmd, desired])
+                self.nudge_round += 1
+                self.nudge = min(self.nudge + NUDGE_STEP / len(NUDGE_ANGLES), NUDGE_MAX)
+                self.nudge_step = 0
+        return np.array([cmd, heading])
 
     def act(self, est, aim, stop_dist=None, can_nudge=True):
         heading = est[2]
@@ -735,6 +745,8 @@ def control_loop(env, viewer=None, delay_steps=CMD_DELAY_STEPS):
                                         to_wp if corners[wp_index] else None,
                                         not wall_ahead(planner, est[:2], est[2]))
                 collided, raw, sent = step(action)
+                if driver.pinned:
+                    driver.pinned, collided = False, True
                 wp_steps += 1
                 steps += 1
 
