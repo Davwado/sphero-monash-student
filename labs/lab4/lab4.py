@@ -116,6 +116,27 @@ TURN_EXIT = np.radians(10)
 COAST_MARGIN = 0.01
 COAST_HORIZON = 10
 
+# Stall nudge. The ball catches on cracks between plates (5 Oct: the same seam near
+# (-0.25, 0.41) held it 9 and 14 steps). Holding the command lets the robot's own speed
+# controller wind up until it lurches free at 6-12 cm/step - straight into the next
+# wall. So after NUDGE_AFTER steps driven without moving (longer than a normal ~5-step
+# start from rest), it lets go, gives one short push of NUDGE_START, then waits
+# NUDGE_WAIT steps (the 2-step command delay plus the response) to see if it moved
+# FREED_DIST forward (averaged over a few readings, so position noise can't fake it)
+# - then normal driving takes over (and if it's still on the crack, it stalls
+# again and is nudged again). If not, each push is NUDGE_STEP harder, up to NUDGE_MAX.
+# The push that worked is remembered, so the next stall starts just below it. Never
+# nudges into a wall ahead.
+# Movement is judged over a window of positions, not per step, so position noise
+# can't hide a stall (normal driving covers ~20 cm in NUDGE_AFTER steps).
+NUDGE_AFTER = 6
+STALL_DIST = 0.02       # m moved over the last NUDGE_AFTER driven steps: below this it's stuck
+FREED_DIST = 0.015      # m moved forward since it got stuck: it's over - back to normal driving
+NUDGE_START = 0.020
+NUDGE_STEP = 0.006
+NUDGE_MAX = 0.050
+NUDGE_WAIT = 4
+
 # Only count "driven forward but not moving" as stuck when a wall is this close to the
 # ball's centre; in open corridor it is just the motor stalling at low speed.
 WALL_CHECK = 0.07
@@ -367,15 +388,62 @@ class Driver:
         self.sent = deque([0.0] * CMD_DELAY_STEPS, maxlen=CMD_DELAY_STEPS)
         self.reset()
 
+        self.nudge_from = NUDGE_START
+
     def record(self, speed_sent):
         self.sent.append(float(speed_sent))
+
+    def observe(self, pos):
+        """Measured position after each step, for stall detection."""
+        pos = np.asarray(pos, dtype=float)[:2].copy()
+        if self.nudge is not None:
+            self.recent.append(pos)
+            forward = (np.mean(self.recent, axis=0) - self.nudge_ref) @ self.nudge_dir
+            if len(self.recent) == self.recent.maxlen and forward >= FREED_DIST:
+                print(f"  Over the bump with a {self.nudge * 1000:.0f} push")
+                self.nudge_from = max(NUDGE_START, self.nudge - NUDGE_STEP)
+                self.nudge, self.cmd = None, 0.0
+                self.driven.clear()
+            return
+        if self.sent[-1] > 0.0:
+            self.driven.append(pos)
+        else:
+            self.driven.clear()
+
+    @property
+    def stalled(self):
+        """Driven forward for NUDGE_AFTER steps in a row without getting anywhere."""
+        return (len(self.driven) == self.driven.maxlen
+                and np.hypot(*(self.driven[-1] - self.driven[0])) < STALL_DIST)
 
     def reset(self):
         self.cmd = 0.0
         self.turning = False
         self.turn_target = 0.0
+        self.driven = deque(maxlen=NUDGE_AFTER + 1)   # positions over consecutive driven steps
+        self.nudge = None       # current push size while nudging, else None
+        self.nudge_step = 0
 
-    def act(self, est, aim, stop_dist=None):
+    def _nudge(self, desired):
+        """One short push, then NUDGE_WAIT steps of nothing; a bit harder each round."""
+        if self.nudge is None:
+            self.nudge, self.nudge_step = self.nudge_from, 0
+            self.nudge_ref = np.mean(self.driven, axis=0)   # where it's stuck (averaged)
+            self.nudge_dir = np.array([np.sin(desired), np.cos(desired)])
+            self.recent = deque(maxlen=3)
+            print(f"  Stuck {NUDGE_AFTER} steps - nudging from {self.nudge * 1000:.0f}")
+        cmd = self.nudge if self.nudge_step == 0 else 0.0
+        self.nudge_step += 1
+        if self.nudge_step > NUDGE_WAIT:
+            if self.nudge >= NUDGE_MAX:
+                print("  Nudges didn't free it - back to normal driving")
+                self.nudge = None
+                self.driven.clear()
+            else:
+                self.nudge, self.nudge_step = min(self.nudge + NUDGE_STEP, NUDGE_MAX), 0
+        return np.array([cmd, desired])
+
+    def act(self, est, aim, stop_dist=None, can_nudge=True):
         heading = est[2]
         desired = float(np.arctan2(aim[0] - est[0], aim[1] - est[1]))
 
@@ -393,6 +461,9 @@ class Driver:
                 and coast_distance(moving, self.sent) >= stop_dist - COAST_MARGIN):
             self.cmd = 0.0
             return np.array([0.0, desired])
+
+        if self.nudge is not None or (self.stalled and can_nudge):
+            return self._nudge(desired)
 
         if self.cmd == 0.0:
             self.cmd = START_CMD if moving < TARGET_STEP else 0.0
@@ -434,6 +505,13 @@ def wall_correction(planner, pos, limit):
     if dist <= WALL_DEADBAND or dist > MAX_WALL_CORRECTION:
         return None
     return shift * (dist - WALL_DEADBAND) / dist
+
+
+def wall_ahead(planner, pos, heading, reach=0.08):
+    """True if there's a wall just in front of the ball, i.e. it's stuck on a wall rather
+    than a crack, so a nudge would only push it into the wall."""
+    ahead = np.asarray(pos, dtype=float) + reach * np.array([np.sin(heading), np.cos(heading)])
+    return bool(occupancy[planner.world_to_occ(ahead)])
 
 
 def near_wall(planner, pos):
@@ -513,6 +591,7 @@ def control_loop(env, viewer=None, delay_steps=CMD_DELAY_STEPS):
         raw = np.asarray(obs, dtype=float)[:4].copy()
         raw[0:2] += frame_offset
         raw[3] = measured_speed(prev_raw_xy, raw[:2])
+        driver.observe(raw[:2])
         prev_raw_xy = raw[:2].copy()
 
         est = ekf.update(raw)[0].copy()
@@ -576,7 +655,8 @@ def control_loop(env, viewer=None, delay_steps=CMD_DELAY_STEPS):
                     action = np.array([0.0, est[2]])
                 else:
                     action = driver.act(est, lookahead_point(est[:2], seg_start, waypoint),
-                                        to_wp if corners[wp_index] else None)
+                                        to_wp if corners[wp_index] else None,
+                                        not wall_ahead(planner, est[:2], est[2]))
                 collided, raw, sent = step(action)
                 wp_steps += 1
                 steps += 1
