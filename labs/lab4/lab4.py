@@ -63,6 +63,17 @@ SEED = 0
 MAX_STEPS = 1500
 START_XY = np.array([-0.5, -0.5])
 WAYPOINT_TOLERANCE = 0.05
+# The final goal is tighter: finish on the middle of the last plate. Once the ball has
+# settled inside WAYPOINT_TOLERANCE but outside GOAL_TOLERANCE, it creeps in with single
+# small pushes (CREEP_START, CREEP_STEP harder each time one doesn't move it, a step
+# softer after one that overshoots), waiting CREEP_WAIT steps after each for the
+# command delay. After MAX_CREEPS pushes it accepts WAYPOINT_TOLERANCE.
+GOAL_TOLERANCE = 0.02
+CREEP_START = 0.010
+CREEP_STEP = 0.004
+CREEP_WAIT = 4
+CREEP_MOVED = 0.005
+MAX_CREEPS = 12
 MAX_STEPS_PER_WAYPOINT = 200
 MAX_REPLANS = 10
 
@@ -115,6 +126,27 @@ TURN_EXIT = np.radians(10)
 # COAST_MARGIN of the stop point anyway.
 COAST_MARGIN = 0.01
 COAST_HORIZON = 10
+
+# Stall nudge. The ball catches on cracks between plates (5 Oct: the same seam near
+# (-0.25, 0.41) held it 9 and 14 steps). Holding the command lets the robot's own speed
+# controller wind up until it lurches free at 6-12 cm/step - straight into the next
+# wall. So after NUDGE_AFTER steps driven without moving (longer than a normal ~5-step
+# start from rest), it lets go, gives one short push of NUDGE_START, then waits
+# NUDGE_WAIT steps (the 2-step command delay plus the response) to see if it moved
+# FREED_DIST forward (averaged over a few readings, so position noise can't fake it)
+# - then normal driving takes over (and if it's still on the crack, it stalls
+# again and is nudged again). If not, each push is NUDGE_STEP harder, up to NUDGE_MAX.
+# The push that worked is remembered, so the next stall starts just below it. Never
+# nudges into a wall ahead.
+# Movement is judged over a window of positions, not per step, so position noise
+# can't hide a stall (normal driving covers ~20 cm in NUDGE_AFTER steps).
+NUDGE_AFTER = 6
+STALL_DIST = 0.02       # m moved over the last NUDGE_AFTER driven steps: below this it's stuck
+FREED_DIST = 0.015      # m moved forward since it got stuck: it's over - back to normal driving
+NUDGE_START = 0.020
+NUDGE_STEP = 0.006
+NUDGE_MAX = 0.050
+NUDGE_WAIT = 4
 
 # Only count "driven forward but not moving" as stuck when a wall is this close to the
 # ball's centre; in open corridor it is just the motor stalling at low speed.
@@ -366,16 +398,87 @@ class Driver:
         # already sent keep arriving at the motor whatever the plan does next.
         self.sent = deque([0.0] * CMD_DELAY_STEPS, maxlen=CMD_DELAY_STEPS)
         self.reset()
+        # Final-approach creep state (see creep()); kept across reset().
+        self.creep_cmd, self.creep_step, self.creeps = CREEP_START, 0, 0
+        self.creep_from, self.creep_to_go = None, 0.0
+
+        self.nudge_from = NUDGE_START
 
     def record(self, speed_sent):
         self.sent.append(float(speed_sent))
+
+    def observe(self, pos):
+        """Measured position after each step, for stall detection."""
+        pos = np.asarray(pos, dtype=float)[:2].copy()
+        if self.nudge is not None:
+            self.recent.append(pos)
+            forward = (np.mean(self.recent, axis=0) - self.nudge_ref) @ self.nudge_dir
+            if len(self.recent) == self.recent.maxlen and forward >= FREED_DIST:
+                print(f"  Over the bump with a {self.nudge * 1000:.0f} push")
+                self.nudge_from = max(NUDGE_START, self.nudge - NUDGE_STEP)
+                self.nudge, self.cmd = None, 0.0
+                self.driven.clear()
+            return
+        if self.sent[-1] > 0.0:
+            self.driven.append(pos)
+        else:
+            self.driven.clear()
+
+    @property
+    def stalled(self):
+        """Driven forward for NUDGE_AFTER steps in a row without getting anywhere."""
+        return (len(self.driven) == self.driven.maxlen
+                and np.hypot(*(self.driven[-1] - self.driven[0])) < STALL_DIST)
 
     def reset(self):
         self.cmd = 0.0
         self.turning = False
         self.turn_target = 0.0
+        self.driven = deque(maxlen=NUDGE_AFTER + 1)   # positions over consecutive driven steps
+        self.nudge = None       # current push size while nudging, else None
+        self.nudge_step = 0
 
-    def act(self, est, aim, stop_dist=None):
+    def creep(self, est, target, settled):
+        """Final approach: inch onto the goal with single small pushes. Returns the action."""
+        pos = np.asarray(est[:2], dtype=float)
+        to_go = float(np.hypot(*(target - pos)))
+        desired = float(np.arctan2(target[0] - pos[0], target[1] - pos[1]))
+        if self.creep_step == 0:
+            if not settled:
+                return np.array([0.0, desired])   # turn to face it while it comes to rest
+            if self.creep_from is not None:
+                moved = float(np.hypot(*(pos - self.creep_from)))
+                if moved < CREEP_MOVED:
+                    self.creep_cmd = min(self.creep_cmd + CREEP_STEP, NUDGE_MAX)
+                elif moved > self.creep_to_go:
+                    self.creep_cmd = max(MIN_DRIVE_SPEED, self.creep_cmd - CREEP_STEP)
+            self.creep_from, self.creep_to_go = pos.copy(), to_go
+            self.creeps += 1
+            print(f"  Creeping onto the goal: {to_go * 100:.1f} cm to go, push {self.creep_cmd * 1000:.0f}")
+        cmd = self.creep_cmd if self.creep_step == 0 else 0.0
+        self.creep_step = (self.creep_step + 1) % (CREEP_WAIT + 1)
+        return np.array([cmd, desired])
+
+    def _nudge(self, desired):
+        """One short push, then NUDGE_WAIT steps of nothing; a bit harder each round."""
+        if self.nudge is None:
+            self.nudge, self.nudge_step = self.nudge_from, 0
+            self.nudge_ref = np.mean(self.driven, axis=0)   # where it's stuck (averaged)
+            self.nudge_dir = np.array([np.sin(desired), np.cos(desired)])
+            self.recent = deque(maxlen=3)
+            print(f"  Stuck {NUDGE_AFTER} steps - nudging from {self.nudge * 1000:.0f}")
+        cmd = self.nudge if self.nudge_step == 0 else 0.0
+        self.nudge_step += 1
+        if self.nudge_step > NUDGE_WAIT:
+            if self.nudge >= NUDGE_MAX:
+                print("  Nudges didn't free it - back to normal driving")
+                self.nudge = None
+                self.driven.clear()
+            else:
+                self.nudge, self.nudge_step = min(self.nudge + NUDGE_STEP, NUDGE_MAX), 0
+        return np.array([cmd, desired])
+
+    def act(self, est, aim, stop_dist=None, can_nudge=True):
         heading = est[2]
         desired = float(np.arctan2(aim[0] - est[0], aim[1] - est[1]))
 
@@ -393,6 +496,9 @@ class Driver:
                 and coast_distance(moving, self.sent) >= stop_dist - COAST_MARGIN):
             self.cmd = 0.0
             return np.array([0.0, desired])
+
+        if self.nudge is not None or (self.stalled and can_nudge):
+            return self._nudge(desired)
 
         if self.cmd == 0.0:
             self.cmd = START_CMD if moving < TARGET_STEP else 0.0
@@ -434,6 +540,13 @@ def wall_correction(planner, pos, limit):
     if dist <= WALL_DEADBAND or dist > MAX_WALL_CORRECTION:
         return None
     return shift * (dist - WALL_DEADBAND) / dist
+
+
+def wall_ahead(planner, pos, heading, reach=0.08):
+    """True if there's a wall just in front of the ball, i.e. it's stuck on a wall rather
+    than a crack, so a nudge would only push it into the wall."""
+    ahead = np.asarray(pos, dtype=float) + reach * np.array([np.sin(heading), np.cos(heading)])
+    return bool(occupancy[planner.world_to_occ(ahead)])
 
 
 def near_wall(planner, pos):
@@ -513,6 +626,7 @@ def control_loop(env, viewer=None, delay_steps=CMD_DELAY_STEPS):
         raw = np.asarray(obs, dtype=float)[:4].copy()
         raw[0:2] += frame_offset
         raw[3] = measured_speed(prev_raw_xy, raw[:2])
+        driver.observe(raw[:2])
         prev_raw_xy = raw[:2].copy()
 
         est = ekf.update(raw)[0].copy()
@@ -569,14 +683,20 @@ def control_loop(env, viewer=None, delay_steps=CMD_DELAY_STEPS):
 
             while wp_steps < MAX_STEPS_PER_WAYPOINT and steps < MAX_STEPS:
                 to_wp = float(np.hypot(*(est[:2] - waypoint)))
-                if corners[wp_index] and to_wp < WAYPOINT_TOLERANCE:
+                is_goal = wp_index == len(waypoints) - 1
+                creeping = is_goal and driver.creeps < MAX_CREEPS
+                at_rest = est[3] * SPEED_DT < SETTLED_MOVE and not any(driver.sent)
+                if creeping and GOAL_TOLERANCE <= to_wp < WAYPOINT_TOLERANCE:
+                    action = driver.creep(est, waypoint, at_rest)
+                elif corners[wp_index] and to_wp < WAYPOINT_TOLERANCE:
                     # Within tolerance of a stop point: stop and hold heading while it settles.
                     # Steering at a target ~1 cm away aims wherever the position noise points.
                     driver.reset()
                     action = np.array([0.0, est[2]])
                 else:
                     action = driver.act(est, lookahead_point(est[:2], seg_start, waypoint),
-                                        to_wp if corners[wp_index] else None)
+                                        to_wp if corners[wp_index] else None,
+                                        not wall_ahead(planner, est[:2], est[2]))
                 collided, raw, sent = step(action)
                 wp_steps += 1
                 steps += 1
@@ -588,8 +708,9 @@ def control_loop(env, viewer=None, delay_steps=CMD_DELAY_STEPS):
                         collided = True
                 if collided:
                     break
-                near = np.hypot(est[0] - waypoint[0], est[1] - waypoint[1]) < WAYPOINT_TOLERANCE
-                settled = est[3] * SPEED_DT < SETTLED_MOVE
+                tolerance = GOAL_TOLERANCE if creeping else WAYPOINT_TOLERANCE
+                near = np.hypot(est[0] - waypoint[0], est[1] - waypoint[1]) < tolerance
+                settled = est[3] * SPEED_DT < SETTLED_MOVE and (not is_goal or not any(driver.sent))
                 # A ~5 cm step can jump right over a 3 cm circle, so a pass-through
                 # waypoint also counts once the ball is beyond it along the segment.
                 ab = waypoint - seg_start
