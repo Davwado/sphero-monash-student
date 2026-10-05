@@ -63,6 +63,17 @@ SEED = 0
 MAX_STEPS = 1500
 START_XY = np.array([-0.5, -0.5])
 WAYPOINT_TOLERANCE = 0.05
+# The final goal is tighter: finish on the middle of the last plate. Once the ball has
+# settled inside WAYPOINT_TOLERANCE but outside GOAL_TOLERANCE, it creeps in with single
+# small pushes (CREEP_START, CREEP_STEP harder each time one doesn't move it, a step
+# softer after one that overshoots), waiting CREEP_WAIT steps after each for the
+# command delay. After MAX_CREEPS pushes it accepts WAYPOINT_TOLERANCE.
+GOAL_TOLERANCE = 0.02
+CREEP_START = 0.010
+CREEP_STEP = 0.004
+CREEP_WAIT = 4
+CREEP_MOVED = 0.005
+MAX_CREEPS = 12
 MAX_STEPS_PER_WAYPOINT = 200
 MAX_REPLANS = 10
 
@@ -387,6 +398,9 @@ class Driver:
         # already sent keep arriving at the motor whatever the plan does next.
         self.sent = deque([0.0] * CMD_DELAY_STEPS, maxlen=CMD_DELAY_STEPS)
         self.reset()
+        # Final-approach creep state (see creep()); kept across reset().
+        self.creep_cmd, self.creep_step, self.creeps = CREEP_START, 0, 0
+        self.creep_from, self.creep_to_go = None, 0.0
 
         self.nudge_from = NUDGE_START
 
@@ -423,6 +437,27 @@ class Driver:
         self.driven = deque(maxlen=NUDGE_AFTER + 1)   # positions over consecutive driven steps
         self.nudge = None       # current push size while nudging, else None
         self.nudge_step = 0
+
+    def creep(self, est, target, settled):
+        """Final approach: inch onto the goal with single small pushes. Returns the action."""
+        pos = np.asarray(est[:2], dtype=float)
+        to_go = float(np.hypot(*(target - pos)))
+        desired = float(np.arctan2(target[0] - pos[0], target[1] - pos[1]))
+        if self.creep_step == 0:
+            if not settled:
+                return np.array([0.0, desired])   # turn to face it while it comes to rest
+            if self.creep_from is not None:
+                moved = float(np.hypot(*(pos - self.creep_from)))
+                if moved < CREEP_MOVED:
+                    self.creep_cmd = min(self.creep_cmd + CREEP_STEP, NUDGE_MAX)
+                elif moved > self.creep_to_go:
+                    self.creep_cmd = max(MIN_DRIVE_SPEED, self.creep_cmd - CREEP_STEP)
+            self.creep_from, self.creep_to_go = pos.copy(), to_go
+            self.creeps += 1
+            print(f"  Creeping onto the goal: {to_go * 100:.1f} cm to go, push {self.creep_cmd * 1000:.0f}")
+        cmd = self.creep_cmd if self.creep_step == 0 else 0.0
+        self.creep_step = (self.creep_step + 1) % (CREEP_WAIT + 1)
+        return np.array([cmd, desired])
 
     def _nudge(self, desired):
         """One short push, then NUDGE_WAIT steps of nothing; a bit harder each round."""
@@ -648,7 +683,12 @@ def control_loop(env, viewer=None, delay_steps=CMD_DELAY_STEPS):
 
             while wp_steps < MAX_STEPS_PER_WAYPOINT and steps < MAX_STEPS:
                 to_wp = float(np.hypot(*(est[:2] - waypoint)))
-                if corners[wp_index] and to_wp < WAYPOINT_TOLERANCE:
+                is_goal = wp_index == len(waypoints) - 1
+                creeping = is_goal and driver.creeps < MAX_CREEPS
+                at_rest = est[3] * SPEED_DT < SETTLED_MOVE and not any(driver.sent)
+                if creeping and GOAL_TOLERANCE <= to_wp < WAYPOINT_TOLERANCE:
+                    action = driver.creep(est, waypoint, at_rest)
+                elif corners[wp_index] and to_wp < WAYPOINT_TOLERANCE:
                     # Within tolerance of a stop point: stop and hold heading while it settles.
                     # Steering at a target ~1 cm away aims wherever the position noise points.
                     driver.reset()
@@ -668,8 +708,9 @@ def control_loop(env, viewer=None, delay_steps=CMD_DELAY_STEPS):
                         collided = True
                 if collided:
                     break
-                near = np.hypot(est[0] - waypoint[0], est[1] - waypoint[1]) < WAYPOINT_TOLERANCE
-                settled = est[3] * SPEED_DT < SETTLED_MOVE
+                tolerance = GOAL_TOLERANCE if creeping else WAYPOINT_TOLERANCE
+                near = np.hypot(est[0] - waypoint[0], est[1] - waypoint[1]) < tolerance
+                settled = est[3] * SPEED_DT < SETTLED_MOVE and (not is_goal or not any(driver.sent))
                 # A ~5 cm step can jump right over a 3 cm circle, so a pass-through
                 # waypoint also counts once the ball is beyond it along the segment.
                 ab = waypoint - seg_start
