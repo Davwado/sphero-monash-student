@@ -140,17 +140,22 @@ COAST_HORIZON = 10
 # The push that worked is remembered, so the next stall starts just below it. Never
 # nudges into a wall ahead.
 # Movement is judged over a window of positions, not per step, so position noise
-# can't hide a stall (normal driving covers ~20 cm in NUDGE_AFTER steps).
+# can't hide a stall (normal driving covers ~20 cm in NUDGE_AFTER steps). A step counts
+# as driven while any drive is still in flight, so braking on and off in front of a stop
+# point (11:48 run: 14, 14, 0 for 80 steps, 6 cm short of the goal) is still a stall.
+# 11:48 run: the last crack needed more than 0.030, so the ceiling is 0.080 and each
+# round steps up 0.005; NUDGE_WAIT 3 is the 2-step delay plus one step of motion.
 NUDGE_AFTER = 6
 STALL_DIST = 0.02       # m moved over the last NUDGE_AFTER driven steps: below this it's stuck
-FREED_DIST = 0.015      # m moved since it got stuck: it's free - back to normal driving
+FREED_DIST = 0.015      # m moved FORWARD along the path since it got stuck: it's over
 NUDGE_START = 0.020
-NUDGE_STEP = 0.006
-NUDGE_MAX = 0.050
-NUDGE_WAIT = 4
+NUDGE_STEP = 0.015      # per full cycle of NUDGE_ANGLES (0.005 per push)
+NUDGE_MAX = 0.080
+NUDGE_WAIT = 3
 # A ball pinned with its side against a wall won't come free by pushing straight ahead
 # (11:35 run: 134 steps stuck like that). Pushes cycle through these headings relative
-# to the way it wants to go, and count as freed on movement in any direction. If even
+# to the way it wants to go. Only forward progress counts as freed - rocking sideways in
+# a crack doesn't (11:48 run: that reset the nudge at 0.030, again and again). If even
 # NUDGE_MAX doesn't free it, it's treated as pinned: collision -> replan, which first
 # backs it off to the cell centre.
 NUDGE_ANGLES = np.radians([0, 30, -30])
@@ -455,14 +460,14 @@ class Driver:
         pos = np.asarray(pos, dtype=float)[:2].copy()
         if self.nudge is not None:
             self.recent.append(pos)
-            moved = float(np.hypot(*(np.mean(self.recent, axis=0) - self.nudge_ref)))
+            moved = float((np.mean(self.recent, axis=0) - self.nudge_ref) @ self.nudge_dir)
             if len(self.recent) == self.recent.maxlen and moved >= FREED_DIST:
                 print(f"  Over the bump with a {self.nudge * 1000:.0f} push")
                 self.nudge_from = max(NUDGE_START, self.nudge - NUDGE_STEP)
                 self.nudge, self.cmd = None, 0.0
                 self.driven.clear()
             return
-        if self.sent[-1] > 0.0:
+        if any(self.sent):
             self.driven.append(pos)
         else:
             self.driven.clear()
@@ -510,6 +515,7 @@ class Driver:
             self.nudge, self.nudge_step, self.nudge_round = self.nudge_from, 0, 0
             self.nudge_ref = np.mean(self.driven, axis=0)   # where it's stuck (averaged)
             self.recent = deque(maxlen=3)
+            self.nudge_dir = np.array([np.sin(desired), np.cos(desired)])   # the way it wants to go
             print(f"  Stuck {NUDGE_AFTER} steps - nudging from {self.nudge * 1000:.0f}")
         heading = wrap_angle(desired + NUDGE_ANGLES[self.nudge_round % len(NUDGE_ANGLES)])
         cmd = self.nudge if self.nudge_step == 0 else 0.0
@@ -537,15 +543,17 @@ class Driver:
             return np.array([0.0, desired])
 
         moving = est[3] * SPEED_DT
+        # A stuck ball isn't going to coast anywhere: unstick it before braking can
+        # cancel the push.
+        if self.nudge is not None or (self.stalled and can_nudge):
+            return self._nudge(desired)
+
         # Brake a ball that is rolling or has drive in flight; from rest with nothing
         # pending there is nothing to coast.
         if (stop_dist is not None and (moving >= SETTLED_MOVE or any(self.sent))
                 and coast_distance(moving, self.sent) >= stop_dist - COAST_MARGIN):
             self.cmd = 0.0
             return np.array([0.0, desired])
-
-        if self.nudge is not None or (self.stalled and can_nudge):
-            return self._nudge(desired)
 
         if self.cmd == 0.0:
             self.cmd = START_CMD if moving < TARGET_STEP else 0.0
