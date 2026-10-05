@@ -9,6 +9,7 @@ Then:
     python lab4.py --sim                 # real time; SPACE pause, N step, UP/DOWN speed
     python lab4.py --sim --speed 0.5     # half speed (--paused to start paused)
     python lab4.py
+    python lab4.py --fast-comms          # David's low-latency Bluetooth path (labs/lab2/fast_comms)
 
 The window is a session, like Lab 1: Bluetooth connects once, then R starts a run,
 P replays the last one, Q quits. Before every real run the ball must sit at START_XY
@@ -222,8 +223,39 @@ def make_real_env(api):
     )
 
 
+# --fast-comms: drive through labs/lab2/fast_comms/fast_link.py instead of SpheroEduAPI.
+# It skips the library's per-command acknowledgement wait and 75 ms gap, and streams
+# sensors every FAST_INTERVAL_MS instead of 150 ms. Robot's collision sensing needs
+# accelerometer/velocity/gyroscope and the meas_* log columns need attitude, so all are
+# streamed (fast_link's default is position only). Note: the command-delay model
+# (CMD_DELAY_STEPS) was fitted on the stock path - refit it from fast-comms runs.
+FAST_SENSORS = ("locator", "velocity", "accelerometer", "gyroscope", "attitude")
+FAST_INTERVAL_MS = 50
+
+
+def _fast_managed_api():
+    sys.path.insert(0, os.path.join(HERE, "..", "lab2", "fast_comms"))
+    from fast_link import fast_managed_api
+    return fast_managed_api(sensors=FAST_SENSORS, interval_ms=FAST_INTERVAL_MS)
+
+
+def _add_lab4_extras(link):
+    """The two SpheroEduAPI calls lab4 makes that fast_link doesn't implement."""
+    def stop_roll(heading=None):
+        if heading is not None:
+            link._last_heading_deg = int(heading) % 360
+        link._last_speed_raw = 0
+        link.fast_stop(getattr(link, "_last_heading_deg", 0))
+
+    def set_back_led(color):
+        ToyUtil.set_back_led(link.toy, color.r, color.g, color.b)
+
+    link.stop_roll, link.set_back_led = stop_roll, set_back_led
+    return link
+
+
 @contextmanager
-def managed_env(sim: bool):
+def managed_env(sim: bool, fast_comms: bool = False):
     """The env for the whole session. On the real robot the Bluetooth link opens
     once here and stays open across runs."""
     if sim:
@@ -235,9 +267,14 @@ def managed_env(sim: bool):
             env.close()
     else:
         with ExitStack() as stack:
-            toy, _ = scan_and_connect()
-            print(f"Selected: {toy.name}")
-            api = stack.enter_context(SpheroEduAPI(toy))
+            if fast_comms:
+                api = _add_lab4_extras(stack.enter_context(_fast_managed_api()))
+                toy = api.toy
+                print(f"Fast comms: {toy.name}, sensors every {FAST_INTERVAL_MS} ms")
+            else:
+                toy, _ = scan_and_connect()
+                print(f"Selected: {toy.name}")
+                api = stack.enter_context(SpheroEduAPI(toy))
             api.reset_aim()
             env = make_real_env(api)
             env.toy = toy   # for reset_robot_frame() and keepalive()
@@ -843,6 +880,8 @@ def main(argv=None):
     parser.add_argument("--sim-delay", type=int, default=CMD_DELAY_STEPS,
                         help="Steps the sim holds back each speed command, like the real ball "
                              "(0 = the old instant response)")
+    parser.add_argument("--fast-comms", action="store_true",
+                        help="Real robot: use the low-latency Bluetooth path in labs/lab2/fast_comms")
     parser.add_argument("--once", action="store_true",
                         help="Do a single run and exit instead of the R/P/Q session")
     parser.add_argument("--no-replay", action="store_true",
@@ -851,7 +890,7 @@ def main(argv=None):
     if args.analytic:
         global model
         model = analytic_dynamics
-    with managed_env(args.sim) as env:
+    with managed_env(args.sim, fast_comms=args.fast_comms) as env:
         run_session(env, args)
 
 
