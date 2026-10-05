@@ -193,20 +193,23 @@ def make_real_env(api):
         dt=0.1,
         max_steps=500000,
         vel_limit=0.15,
-        # Visualiser scales its drawing to fit world_width x world_height
-        # into the window (see visualiser.py: scale = min(w/world_width,
-        # h/world_height)). The maze only spans ~1.1m, so the old 5.0x5.0
-        # here (left over from lab1/lab2's much bigger open-world layout)
-        # drew it tiny and centred in the window - looked like the ball
-        # started "in the middle" instead of at a corner of the maze.
-        # Matches make_sim_env()'s world size so both windows scale the same.
-        world_width=1.25,
-        world_height=1.25,
+        # Keep this at 5.0. Robot also clips every observation to +-world/2 in the
+        # robot's own odometry frame (origin = the start corner), and the route runs
+        # out to ~1 m from that origin. At 1.25 the controller was fed min(pos, 0.625):
+        # once the ball passed ~0.6 m the estimate froze (map y stuck at exactly 0.125)
+        # while the ball drove on, so it believed it was still short of the waypoint
+        # and kept pushing into the wall. Only the DRAWING is sized to the maze, below.
+        world_width=5.0,
+        world_height=5.0,
         goal_pos=(0.5, 0.5),
         goal_tolerance=GOAL_TOLERANCE,
         render_mode="human",
         window_size=(800, 800),
     )
+    # The visualiser scales its drawing to fit its world size, and the maze only spans
+    # ~1.1 m: at 5.0 it is tiny and centred, so the ball looks like it starts mid-maze.
+    # Matches make_sim_env()'s 1.25 so both windows scale the same.
+    env.vis.world_width = env.vis.world_height = 1.25
     env.vis.set_occupancy(map, 0.125)
     return env
 
